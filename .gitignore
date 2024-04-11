@@ -9,6 +9,7 @@ __pycache__/
 .baresip
 .twinkle
 ./pjproject
+pjproject
 # C extensions
 *.so
 
