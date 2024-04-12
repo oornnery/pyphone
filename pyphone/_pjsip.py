@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import re
+import threading
 import pjsua as pj
 
 import dotenv
@@ -27,53 +28,41 @@ lib = None
 
 
 # Subclass to extend the Account and get notifications etc.
-
-class MyAccountCallback(pj.AccountCallback):
-    
-    def __init__(self, account=None):
-        pj.AccountCallback.__init__(self, account)
-    
-    def on_reg_state(self, acc, status):
-        if status.is_final():
-            if status.is_confirmed():
-                print("Call confirmed")
-            else:
-                print("Call failed")
-
-    def on_incoming_call(self, acc, call):
-        global current_call
-        current_call = call
-        print("Incoming call")
-        call.answer_with_video()
-        print("Call answered")
-
-    def on_outgoing_call(self, acc, call):
-        global current_call
-        current_call = call
-        print("Outgoing call")
-        call.answer_with_video()
-        print("Call answered")
-
+# Callback to receive events from Call
 class MyCallCallback(pj.CallCallback):
-    
     def __init__(self, call=None):
         pj.CallCallback.__init__(self, call)
 
-    def on_call_media_state(self, call):
-        global current_call
-        if current_call == call:
-            print("Call media state changed")
+    # Notification when call state has changed
+    def on_state(self):
+        print("Call is ", self.call.info().state_text, end=' ')
+        print("last code =", self.call.info().last_code, end=' ') 
+        print(f'({self.call.info().last_reason})')
+        
+    # Notification when call's media state has changed.
+    def on_media_state(self):
+        global lib
+        if self.call.info().media_state == pj.MediaState.ACTIVE:
+            # Connect the call to sound device
+            call_slot = self.call.info().conf_slot
+            lib.conf_connect(call_slot, 0)
+            lib.conf_connect(0, call_slot)
+            print("Hello world, I can talk!")
+    
 
-    def on_call_state(self, call):
-        global current_call
-        if current_call == call:
-            print("Call state changed")
+class MyAccountCallback(pj.AccountCallback):
+    sem = None
 
-    def on_call_media_state(self, call):
-        global current_call
-        if current_call == call:
-            print("Call media state changed")
+    def __init__(self, account):
+        pj.AccountCallback.__init__(self, account)
 
+    def wait(self):
+        self.sem = threading.Semaphore(0)
+        self.sem.acquire()
+
+    def on_reg_state(self):
+        if self.sem and self.account.info().reg_status >= 200:
+                self.sem.release()
 
 # Logging callback
 def log_cb(level, str, len):
@@ -87,6 +76,7 @@ def log_cb(level, str, len):
 
 
 def start_service(username: str, password: str, domain: str, port: int = 5060):
+    # sourcery skip: extract-method, remove-unnecessary-cast
     global transport
     global acc
     global lib
@@ -114,9 +104,8 @@ def start_service(username: str, password: str, domain: str, port: int = 5060):
                 domain=domain,
                 username=username,
                 password=password
-            ),
-                cb=MyAccountCallback()
-            )
+            ))
+        acc.set_callback(MyAccountCallback(acc))
         # Set presence to available
         acc.set_presence_status(True, activity=pj.PresenceActivity.UNKNOWN)
     
@@ -144,7 +133,7 @@ def call(uri: str):
             cb=MyCallCallback(),
             )
     except pj.Error as e:
-        console.print(Panel("Exception: " + str(e), title="Error", border_style="red"))
+        console.print(Panel(f"Exception: {e}", title="Error", border_style="red"))
         current_call = None
     finally:
         del lck
@@ -161,7 +150,7 @@ def hangup(code=487):
     try:
         current_call.hangup(code)
     except pj.Error as e:
-        console.print(Panel("Exception: " + str(e), title="Error", border_style="red"))
+        console.print(Panel(f"Exception: {e}", title="Error", border_style="red"))
     finally:
         current_call = None
 
