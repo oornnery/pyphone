@@ -121,7 +121,7 @@ def start_service(username: str, password: str, domain: str, port: int = 5060):
         acc.set_presence_status(True, activity=pj.PresenceActivity.UNKNOWN)
     
     except pj.Error as e:
-        console.print(Panel("Exception: " + str(e), title="Error", border_style="red"))
+        console.print(Panel(f"Exception: {e}", title="Error", border_style="red"))
         quit()
 
 def call(uri: str):
@@ -293,7 +293,7 @@ def main(username: str, password: str, domain: str, port: int = 5060):
                 current_call_info()
             input("\nPress ENTER to continue...")
     except pj.Error as e:
-        console.print(Panel("Exception: " + str(e), title="Error", border_style="red"))
+        console.print(Panel(f"Exception: {e}", title="Error", border_style="red"))
         quit()
     except KeyboardInterrupt:
         console.print("\nInterrupted")

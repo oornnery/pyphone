@@ -10,6 +10,7 @@ __pycache__/
 .twinkle
 ./pjproject
 pjproject
+pjproject-2.14.1
 # C extensions
 *.so
 
