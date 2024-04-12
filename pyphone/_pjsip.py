@@ -30,25 +30,32 @@ lib = None
 # Subclass to extend the Account and get notifications etc.
 # Callback to receive events from Call
 class MyCallCallback(pj.CallCallback):
+
     def __init__(self, call=None):
         pj.CallCallback.__init__(self, call)
 
     # Notification when call state has changed
     def on_state(self):
-        print("Call is ", self.call.info().state_text, end=' ')
+        global current_call
+        print("Call with", self.call.info().remote_uri, end=' ')
+        print("is", self.call.info().state_text, end=' ')
         print("last code =", self.call.info().last_code, end=' ') 
-        print(f'({self.call.info().last_reason})')
+        print(f"{self.call.info().last_reason}")
         
+        if self.call.info().state == pj.CallState.DISCONNECTED:
+            current_call = None
+            print('Current call is', current_call)
+
     # Notification when call's media state has changed.
     def on_media_state(self):
-        global lib
         if self.call.info().media_state == pj.MediaState.ACTIVE:
             # Connect the call to sound device
             call_slot = self.call.info().conf_slot
-            lib.conf_connect(call_slot, 0)
-            lib.conf_connect(0, call_slot)
-            print("Hello world, I can talk!")
-    
+            pj.Lib.instance().conf_connect(call_slot, 0)
+            pj.Lib.instance().conf_connect(0, call_slot)
+            print("Media is now active")
+        else:
+            print("Media is inactive")
 
 class MyAccountCallback(pj.AccountCallback):
     sem = None
@@ -105,7 +112,9 @@ def start_service(username: str, password: str, domain: str, port: int = 5060):
                 username=username,
                 password=password
             ))
-        acc.set_callback(MyAccountCallback(acc))
+        acc_cb = MyAccountCallback(acc)
+        acc.set_callback(acc_cb)
+        acc_cb.wait()
         # Set presence to available
         acc.set_presence_status(True, activity=pj.PresenceActivity.UNKNOWN)
     
