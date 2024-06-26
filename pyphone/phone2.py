@@ -1,21 +1,37 @@
-import pjsua2 as pj
 import time
 import dotenv
+import pjsua2 as pj
+
 
 env = dotenv.dotenv_values(".env")
+
 
 class VoIPManager:
     def __init__(self):
         # Create and initialize the library
-        ep_cfg = pj.EpConfig()
         self.ep = pj.Endpoint()
+        version = self.ep.libVersion().full
+        # Configure endpoint
+        ep_cfg = pj.EpConfig()
+        ep_cfg.uaConfig.userAgent = f"pyphone-{version}"
+        ep_cfg.uaConfig.threadCnt = 1
+        ep_cfg.uaConfig.mainThreadCnt = False
+        # ep_cfg.uaConfig.writer = self.logger
+        ep_cfg.uaConfig.filename = "logs/pyphone.log"
+        ep_cfg.uaConfig.level = 5
+        ep_cfg.uaConfig.consoleLevel = 5
+        
         self.ep.libCreate()
         self.ep.libInit(ep_cfg)
+        
         # Create SIP transport. Error handling sample is shown
         sip_transport_config = pj.TransportConfig()
-        sip_transport_config.port = 5060
+        sip_transport_config.port = 5061
+        udp_config = pj.PJSIP_TRANSPORT_UDP
+        tcp_config = pj.PJSIP_TRANSPORT_TCP
+        tls_config = pj.PJSIP_TRANSPORT_TLS
         self.transport = self.ep.transportCreate(
-            pj.PJSIP_TRANSPORT_UDP, 
+            udp_config, 
             sip_transport_config
             )
         # start the library
@@ -51,8 +67,7 @@ class VoIPManager:
 
     def hangup(self):
         self.prm.statusCode = pj.PJSIP_SC_REQUEST_TERMINATED
-        self.call.hangup(prm)
-        self.call.hasMedia
+        self.call.hangup(self.prm)
 
     def set_callback(self, callback_function):
         # Aqui você pode definir um callback para eventos específicos, como chamadas recebidas

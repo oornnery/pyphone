@@ -8,6 +8,24 @@ Pjproject guide to build PJSUA and PJSUA2: [Guide](https://docs.pjsip.org/en/lat
 
 ### Install
 
+Install dependencies (Ubuntu 22.04 LTS).
+
+```shell
+sudo apt update
+sudo apt install swig build-essential python3-dev libasound2-dev \
+    libssl3 libssl-dev ffmpeg libv4l-dev libv4l-0 \
+    alsa-base alsa-oss libyuv0 libyuv-dev libsdl2-2.0-0 libsdl2-dev \
+    libx264-163  libx264-dev
+```
+
+Build PJSIP.
+
+```shell
+./install.sh
+```
+
+Manual Build PJSIP
+
 ```shell
 # Clone the pyphone repository
 git clone https://github.com/oornnery/pyphone.git
@@ -18,44 +36,26 @@ cd pyphone
 tar -xvf pjproject-2.14.1.tar.gz
 cd pjproject-2.14.1
 # Build PJSIP
-./configure CFLAGS="-fPIC"
-make dep && make && sudo make install
+./configure ./configure --disable-video --disable-v4l2 CFLAGS="-fPIC" CXXFLAGS="-fPIC"
+make dep && make
+sudo make install
 ```
 
-### Build to python3
-
-Install dependencies.
-
-```shell
-sudo apt-get install swig build-essential python3-dev libasound2-dev
-```
-
-Official build to python3:
+Build PJSUA2 to python3.
 
 ```shell
 # Build to python
 cd pjsip-apps/src/swig/python
-# Clone the build to python 3
-make && sudo make install
-```
-
-Alternatively, you can build to python3 with the following command.
-
-```shell
-# Build to python
-cd pjsip-apps/src/
-# Clone the build to python 3
-git clone https://github.com/mgwilliams/python3-pjsip.git
-cd python3-pjsip
-# Install pjsua
-python3 setup.py build
-sudo python3 setup.py install
+make
+sudo make install
+# Poetry alternative
+# poetry add .
 ```
 
 Test import pjsua to python firstly.
 
 ```shell
-python3 -c "import pjsua"
+python3 -c "import pjsua2"
 ```
 
 ### Settings and Configuration
