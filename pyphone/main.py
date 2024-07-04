@@ -14,61 +14,61 @@ from rich.text import Text
 console = Console()
 env = dotenv.dotenv_values(".env")
 
-@dataclass
-class UaConfig:
-    maxCalls: Optional[int] = 2
-    userAgent: Optional[str] = "pyphone"
-    threadCnt: Optional[int] = 0
-    mainThreadOnly: Optional[bool] = False
-    nameserver: Optional[List[str]] = []
-    outboundProxies: Optional[List[str]] = []
-    stunServer: Optional[List[str]] = []
-    stunTryIpv6: Optional[bool] = False
-    stunIgnoreFailure: Optional[bool] = True
-    natTypeInSdp: Optional[int] = 2
-    mwiUnsolicitedEnabled: Optional[bool] = False
-    enableUpnp: Optional[bool] = False
-    upnpIfName: Optional[str] = ""
+# @dataclass
+# class UaConfig:
+#     maxCalls: Optional[int] = 2
+#     userAgent: Optional[str] = "pyphone"
+#     threadCnt: Optional[int] = 0
+#     mainThreadOnly: Optional[bool] = False
+#     nameserver: Optional[List[str]] = []
+#     outboundProxies: Optional[List[str]] = []
+#     stunServer: Optional[List[str]] = []
+#     stunTryIpv6: Optional[bool] = False
+#     stunIgnoreFailure: Optional[bool] = True
+#     natTypeInSdp: Optional[int] = 2
+#     mwiUnsolicitedEnabled: Optional[bool] = False
+#     enableUpnp: Optional[bool] = False
+#     upnpIfName: Optional[str] = ""
 
-@dataclass
-class LogConfig:
-    msgLogging: int
-    level: int
-    consoleLevel: int
-    decor: int
-    filename: str
-    fileFlags: int
-    writer: 'LogWriter'  # Assuming LogWriter is another dataclass or custom class
+# @dataclass
+# class LogConfig:
+#     msgLogging: int
+#     level: int
+#     consoleLevel: int
+#     decor: int
+#     filename: str
+#     fileFlags: int
+#     writer: 'LogWriter'  # Assuming LogWriter is another dataclass or custom class
 
-@dataclass
-class MediaConfig:
-    clockRate: int
-    sndClockRate: int
-    channelCount: int
-    audioFramePtime: int
-    maxMediaPorts: int
-    hasIoqueue: bool
-    threadCnt: int
-    quality: int
-    ptime: int
-    noVad: bool
-    ilbcMode: int
-    txDropPct: int
-    rxDropPct: int
-    ecOptions: int
-    ecTailLen: int
-    sndRecLatency: int
-    sndPlayLatency: int
-    jbInit: int
-    jbMinPre: int
-    jbMaxPre: int
-    jbMax: int
-    jbDiscardAlgo: 'pjmedia_jb_discard_algo'
-    sndAutoCloseTime: int
-    vidPreviewEnableNative: bool
+# @dataclass
+# class MediaConfig:
+#     clockRate: int
+#     sndClockRate: int
+#     channelCount: int
+#     audioFramePtime: int
+#     maxMediaPorts: int
+#     hasIoqueue: bool
+#     threadCnt: int
+#     quality: int
+#     ptime: int
+#     noVad: bool
+#     ilbcMode: int
+#     txDropPct: int
+#     rxDropPct: int
+#     ecOptions: int
+#     ecTailLen: int
+#     sndRecLatency: int
+#     sndPlayLatency: int
+#     jbInit: int
+#     jbMinPre: int
+#     jbMaxPre: int
+#     jbMax: int
+#     jbDiscardAlgo: 'pjmedia_jb_discard_algo'
+#     sndAutoCloseTime: int
+#     vidPreviewEnableNative: bool
 
 class VoIPManager:
-    def __init__(self, ua_config: UaConfig, log_config: LogConfig, media_config: MediaConfig):
+    def __init__(self):
         # Create and initialize the library
         self.ep = pj.Endpoint()
         self.ep.libCreate()
@@ -96,12 +96,12 @@ class VoIPManager:
         # Media setting
         ep_cfg.medConfig.maxMediaPorts = 254 # Max media ports
         ep_cfg.medConfig.clockRate = 16000 # Core clock rate
-		ep_cfg.medConfig.sndClockRate = 0 # Send device clock rate (0: follow core)
-		ep_cfg.medConfig.audioFramePtime = 20 # Core ptime
-		ep_cfg.medConfig.ptime = 20 # RTP ptime
-		ep_cfg.medConfig.quality = 8 # Media quality (1-10)
-		ep_cfg.medConfig.noVad = True # VAD (Bool)
-		ep_cfg.medConfig.ecTailLen	= 200 # Echo canceller tail length (ms, 0 to disable)
+		# ep_cfg.medConfig.sndClockRate = 0 # Send device clock rate (0: follow core)
+		# ep_cfg.medConfig.audioFramePtime = 20 # Core ptime
+		# ep_cfg.medConfig.ptime = 20 # RTP ptime
+		# ep_cfg.medConfig.quality = 8 # Media quality (1-10)
+		# ep_cfg.medConfig.noVad = True # VAD (Bool)
+		# ep_cfg.medConfig.ecTailLen	= 200 # Echo canceller tail length (ms, 0 to disable)
         
         # Init library
         self.ep.libInit(ep_cfg)
@@ -147,42 +147,42 @@ class VoIPManager:
         cred.data = password
         acc_cfg.sipConfig.authCreds.append(cred)
         
-        acc_cfg.sipConfig.proxies = []
+        # acc_cfg.sipConfig.proxies = []
         acc_cfg.sipConfig.outboundProxy = f"sip:{username}@{domain}"
 
         # SIP features
-        acc_cfg.callConfig.prackUse = ...
-        acc_cfg.callConfig.timerUse = ...
-        acc_cfg.callConfig.timerSessExpiresSec = ...
-        acc_cfg.presConfig.publishEnabled = ...
-        acc_cfg.mwiConfig.enabled = ...
-        acc_cfg.natConfig.contactRewriteUse = ... 
-        acc_cfg.natConfig.viaRewriteUse = ... 
-        acc_cfg.natConfig.sdpNatRewriteUse = ... 
-        acc_cfg.natConfig.sipOutboundUse = ... 
-        acc_cfg.natConfig.udpKaIntervalSec = ... 
+        # acc_cfg.callConfig.prackUse = ...
+        # acc_cfg.callConfig.timerUse = ...
+        # acc_cfg.callConfig.timerSessExpiresSec = ...
+        # acc_cfg.presConfig.publishEnabled = ...
+        # acc_cfg.mwiConfig.enabled = ...
+        # acc_cfg.natConfig.contactRewriteUse = ... 
+        # acc_cfg.natConfig.viaRewriteUse = ... 
+        # acc_cfg.natConfig.sdpNatRewriteUse = ... 
+        # acc_cfg.natConfig.sipOutboundUse = ... 
+        # acc_cfg.natConfig.udpKaIntervalSec = ... 
 
-        # Media
-        acc_cfg.mediaConfig.transportConfig.port = ...
-        acc_cfg.mediaConfig.transportConfig.portRange = ...
-        acc_cfg.mediaConfig.lockCodecEnabled = ...
-        acc_cfg.mediaConfig.srtpUse = ...
-        acc_cfg.mediaConfig.srtpSecureSignaling = ...
-        acc_cfg.mediaConfig.ipv6Use = ... # pj.PJSUA_IPV6_ENABLED or pj.PJSUA_IPV6_DISABLED
+        # # Media
+        # acc_cfg.mediaConfig.transportConfig.port = ...
+        # acc_cfg.mediaConfig.transportConfig.portRange = ...
+        # acc_cfg.mediaConfig.lockCodecEnabled = ...
+        # acc_cfg.mediaConfig.srtpUse = ...
+        # acc_cfg.mediaConfig.srtpSecureSignaling = ...
+        # acc_cfg.mediaConfig.ipv6Use = ... # pj.PJSUA_IPV6_ENABLED or pj.PJSUA_IPV6_DISABLED
 
-        # NAT
-        acc_cfg.natConfig.sipStunUse = ... 
-        acc_cfg.natConfig.mediaStunUse = ... 
-        acc_cfg.natConfig.iceEnabled = ... 
-        acc_cfg.natConfig.iceAggressiveNomination = ...
-        acc_cfg.natConfig.iceAlwaysUpdate = ...
-        acc_cfg.natConfig.iceMaxHostCands = ...
-        acc_cfg.natConfig.turnEnabled = ... 
-        acc_cfg.natConfig.turnServer = ... 
-        acc_cfg.natConfig.turnConnType = ... 
-        acc_cfg.natConfig.turnUserName = ... 
-        acc_cfg.natConfig.turnPasswordType = ...
-        acc_cfg.natConfig.turnPassword = ... 
+        # # NAT
+        # acc_cfg.natConfig.sipStunUse = ... 
+        # acc_cfg.natConfig.mediaStunUse = ... 
+        # acc_cfg.natConfig.iceEnabled = ... 
+        # acc_cfg.natConfig.iceAggressiveNomination = ...
+        # acc_cfg.natConfig.iceAlwaysUpdate = ...
+        # acc_cfg.natConfig.iceMaxHostCands = ...
+        # acc_cfg.natConfig.turnEnabled = ... 
+        # acc_cfg.natConfig.turnServer = ... 
+        # acc_cfg.natConfig.turnConnType = ... 
+        # acc_cfg.natConfig.turnUserName = ... 
+        # acc_cfg.natConfig.turnPasswordType = ...
+        # acc_cfg.natConfig.turnPassword = ... 
         
         self.acc.create(acc_cfg)
     
