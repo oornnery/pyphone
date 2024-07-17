@@ -92,10 +92,16 @@ class VoIPManager:
         # ep_cfg.nameserver # list of nameservers
         # ep_cfg.stunServer # list of STUN servers
         # ep_cfg.uaConfig.stunIgnoreFailure = True # bool
-        
         # Media setting
-        ep_cfg.medConfig.maxMediaPorts = 254 # Max media ports
-        ep_cfg.medConfig.clockRate = 16000 # Core clock rate
+        media_cfg = pj.MediaConfig()
+        media_cfg.clockRate = 16000
+        media_cfg.channelCount = 1
+        media_cfg.ptime = 20
+        media_cfg.quality = 8
+        
+        ep_cfg.medConfig = media_cfg
+        # ep_cfg.medConfig.maxMediaPorts = 254 # Max media ports
+        # ep_cfg.medConfig.clockRate = 16000 # Core clock rate
 		# ep_cfg.medConfig.sndClockRate = 0 # Send device clock rate (0: follow core)
 		# ep_cfg.medConfig.audioFramePtime = 20 # Core ptime
 		# ep_cfg.medConfig.ptime = 20 # RTP ptime
@@ -107,15 +113,23 @@ class VoIPManager:
         self.ep.libInit(ep_cfg)
         
         # Set codec
-        self.ep.codecSetPriority("PCMA/8000", 255)
-        self.ep.codecSetPriority("PCMU/8000", 255)
+        # Create codec info for PCMU
+        # codec_info = pj.CodecInfo()
+        # codec_info.codec_id = pj.PJMEDIA_CODEC_PCMU
+        # codec_info.priority = 100
+        # self.ep.codecSetPriority("PCMA/8000", 100)
+        # codec_param = pj.CodecParam()
+        # codec_param.info.codec_id = "PCMA/8000"
+        # codec_param.info.priority = 100
+        # self.ep.codecSetParam("PCMA/8000", codec_param)
         
         # Create SIP transport. Error handling sample is shown
         udp_config = pj.PJSIP_TRANSPORT_UDP
         tcp_config = pj.PJSIP_TRANSPORT_TCP
         tls_config = pj.PJSIP_TRANSPORT_TLS
         sip_transport_config = pj.TransportConfig()
-        sip_transport_config.port = 10080
+        sip_transport_config.port = 0
+        
         # sip_transport_config.publicAddress = "0.0.0.0"
         self.transport = self.ep.transportCreate(
             udp_config, 
