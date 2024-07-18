@@ -66,6 +66,7 @@ env = dotenv.dotenv_values(".env")
 #     jbDiscardAlgo: 'pjmedia_jb_discard_algo'
 #     sndAutoCloseTime: int
 #     vidPreviewEnableNative: bool
+USE_THREADS = True
 
 class VoIPManager:
     def __init__(self):
@@ -75,8 +76,12 @@ class VoIPManager:
         # Configure endpoint
         ep_cfg = pj.EpConfig()
         # System settings
-        ep_cfg.uaConfig.threadCnt = 1 # If use threads
-        ep_cfg.uaConfig.mainThreadCnt = False # If use main thread (1 thread)
+        if USE_THREADS:
+            ep_cfg.uaConfig.threadCnt = 1
+            ep_cfg.uaConfig.mainThreadCnt = False
+        else:
+            ep_cfg.uaConfig.threadCnt = 0
+            ep_cfg.uaConfig.mainThreadCnt = True
         # Agent settings
         version = self.ep.libVersion().full
         ep_cfg.uaConfig.userAgent = f"pyphone-{version}"
@@ -122,15 +127,14 @@ class VoIPManager:
         # codec_param.info.codec_id = "PCMA/8000"
         # codec_param.info.priority = 100
         # self.ep.codecSetParam("PCMA/8000", codec_param)
-        
         # Create SIP transport. Error handling sample is shown
         udp_config = pj.PJSIP_TRANSPORT_UDP
         tcp_config = pj.PJSIP_TRANSPORT_TCP
         tls_config = pj.PJSIP_TRANSPORT_TLS
         sip_transport_config = pj.TransportConfig()
         sip_transport_config.port = 0
+        sip_transport_config.publicAddress = "0.0.0.0"
         
-        # sip_transport_config.publicAddress = "0.0.0.0"
         self.transport = self.ep.transportCreate(
             udp_config, 
             sip_transport_config
