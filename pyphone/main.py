@@ -75,17 +75,23 @@ class VoIPManager:
         self.ep.libCreate()
         # Configure endpoint
         ep_cfg = pj.EpConfig()
+        
+        ua_cfg = pj.UaConfig()
         # System settings
         if USE_THREADS:
-            ep_cfg.uaConfig.threadCnt = 1
-            ep_cfg.uaConfig.mainThreadCnt = False
+            ua_cfg.threadCnt = 1
+            ua_cfg.mainThreadCnt = False
         else:
-            ep_cfg.uaConfig.threadCnt = 0
-            ep_cfg.uaConfig.mainThreadCnt = True
+            ua_cfg.threadCnt = 0
+            ua_cfg.mainThreadCnt = True
+        
         # Agent settings
         version = self.ep.libVersion().full
-        ep_cfg.uaConfig.userAgent = f"pyphone-{version}"
-        ep_cfg.uaConfig.maxCalls = 4
+        
+        ua_cfg.userAgent = f"pyphone-{version}"
+        ua_cfg.maxCalls = 4
+        
+        ep_cfg.uaConfig = ua_cfg
         # Logs
         #ep_cfg.logConfig.writer = self.logger
         ep_cfg.logConfig.filename = "logs/pyphone.log"
@@ -103,30 +109,29 @@ class VoIPManager:
         media_cfg.channelCount = 1
         media_cfg.ptime = 20
         media_cfg.quality = 8
+        media_cfg.threadCnt = 1
+        media_cfg.quality = 10
+        media_cfg.clockRate = 16000
+        media_cfg.ecTailLen = 0
+        media_cfg.threadPrio = 0
         
         ep_cfg.medConfig = media_cfg
-        # ep_cfg.medConfig.maxMediaPorts = 254 # Max media ports
-        # ep_cfg.medConfig.clockRate = 16000 # Core clock rate
-		# ep_cfg.medConfig.sndClockRate = 0 # Send device clock rate (0: follow core)
-		# ep_cfg.medConfig.audioFramePtime = 20 # Core ptime
-		# ep_cfg.medConfig.ptime = 20 # RTP ptime
-		# ep_cfg.medConfig.quality = 8 # Media quality (1-10)
-		# ep_cfg.medConfig.noVad = True # VAD (Bool)
-		# ep_cfg.medConfig.ecTailLen	= 200 # Echo canceller tail length (ms, 0 to disable)
         
+    
         # Init library
         self.ep.libInit(ep_cfg)
+        # Ajuste das configurações do dispositivo de áudio
+        aud_dev_manager = self.ep.audDevManager()
+        dev_info = aud_dev_manager.getDevInfo(0)  # Assume que 0 é o ID do dispositivo padrão
+        dev_info.input_latency = 100
+        dev_info.output_latency = 100
+        
+        self.ep.audDevManager = aud_dev_manager
         
         # Set codec
-        # Create codec info for PCMU
-        # codec_info = pj.CodecInfo()
-        # codec_info.codec_id = pj.PJMEDIA_CODEC_PCMU
-        # codec_info.priority = 100
-        # self.ep.codecSetPriority("PCMA/8000", 100)
-        # codec_param = pj.CodecParam()
-        # codec_param.info.codec_id = "PCMA/8000"
-        # codec_param.info.priority = 100
-        # self.ep.codecSetParam("PCMA/8000", codec_param)
+        self.ep.codecSetPriority("PCMU/8000", 255)
+        self.ep.codecSetPriority("PCMA/8000", 254)
+        
         # Create SIP transport. Error handling sample is shown
         udp_config = pj.PJSIP_TRANSPORT_UDP
         tcp_config = pj.PJSIP_TRANSPORT_TCP
@@ -145,6 +150,7 @@ class VoIPManager:
         self.acc = pj.Account()
         self.prm = pj.CallOpParam()
         self.call = pj.Call(self.acc)
+
 
     def register(self, username, password, domain):
         # TODO: Mover para uma dataclass
@@ -191,7 +197,7 @@ class VoIPManager:
         # # NAT
         # acc_cfg.natConfig.sipStunUse = ... 
         # acc_cfg.natConfig.mediaStunUse = ... 
-        # acc_cfg.natConfig.iceEnabled = ... 
+        acc_cfg.natConfig.iceEnabled = True
         # acc_cfg.natConfig.iceAggressiveNomination = ...
         # acc_cfg.natConfig.iceAlwaysUpdate = ...
         # acc_cfg.natConfig.iceMaxHostCands = ...
