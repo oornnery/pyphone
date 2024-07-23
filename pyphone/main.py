@@ -68,6 +68,32 @@ env = dotenv.dotenv_values(".env")
 #     vidPreviewEnableNative: bool
 USE_THREADS = True
 
+class Call(pj.Call):
+    def __init__(self, acc, call_id=pj.PJSUA_INVALID_ID):
+        pj.Call.__init__(self, acc, call_id)
+
+    def onCallState(self, prm):
+        ci = self.getInfo()
+        logger.info(f"Call state: {ci.stateText}")
+        if ci.state == pj.PJSIP_INV_STATE_CONFIRMED:
+            self.setMediaState()
+
+    def onCallMediaState(self, prm):
+        logger.info("Media state changed")
+        self.setMediaState()
+
+    def setMediaState(self):
+        logger.info("Setting media state")
+        ci = self.getInfo()
+        for mi in ci.media:
+            if mi.type == pj.PJMEDIA_TYPE_AUDIO:
+                aud_med = self.getAudioMedia(mi.index)
+                if aud_med:
+                    logger.info(f"Setting audio media at index {mi.index}")
+                    ep.audDevManager().getCaptureDevMedia().startTransmit(aud_med)
+                    aud_med.startTransmit(ep.audDevManager().getPlaybackDevMedia())
+
+
 class VoIPManager:
     def __init__(self):
         # Create and initialize the library
@@ -100,18 +126,14 @@ class VoIPManager:
         ep_cfg.logConfig.consoleLevel = 5
 
         # Network settings
-        # ep_cfg.nameserver # list of nameservers
-        # ep_cfg.stunServer # list of STUN servers
-        # ep_cfg.uaConfig.stunIgnoreFailure = True # bool
+        
         # Media setting
         media_cfg = pj.MediaConfig()
         media_cfg.clockRate = 16000
         media_cfg.channelCount = 1
         media_cfg.ptime = 20
-        media_cfg.quality = 8
         media_cfg.threadCnt = 1
         media_cfg.quality = 10
-        media_cfg.clockRate = 16000
         media_cfg.ecTailLen = 0
         media_cfg.threadPrio = 0
         
@@ -120,6 +142,7 @@ class VoIPManager:
     
         # Init library
         self.ep.libInit(ep_cfg)
+        
         # Ajuste das configurações do dispositivo de áudio
         aud_dev_manager = self.ep.audDevManager()
         dev_info = aud_dev_manager.getDevInfo(0)  # Assume que 0 é o ID do dispositivo padrão
@@ -136,9 +159,14 @@ class VoIPManager:
         udp_config = pj.PJSIP_TRANSPORT_UDP
         tcp_config = pj.PJSIP_TRANSPORT_TCP
         tls_config = pj.PJSIP_TRANSPORT_TLS
+        # Configuração de transporte
         sip_transport_config = pj.TransportConfig()
-        sip_transport_config.port = 0
-        sip_transport_config.publicAddress = "0.0.0.0"
+        # sip_transport_config.port = 5061  # Porta padrão para SIP
+        sip_transport_config.randomizePort = True  # Não randomizar a porta
+        sip_transport_config.publicAddress = "201.68.208.87"  # Endereço público
+        sip_transport_config.boundAddress = "0.0.0.0"  # Endereço local
+        # sip_transport_config.qosType = 1  # Exemplo de QoS
+        # sip_transport_config.qosParams = pj.QosParams()  # Supondo que você tenha 
         
         self.transport = self.ep.transportCreate(
             udp_config, 
@@ -149,7 +177,7 @@ class VoIPManager:
         # SIP account
         self.acc = pj.Account()
         self.prm = pj.CallOpParam()
-        self.call = pj.Call(self.acc)
+        self.call = Call(self.acc)
 
 
     def register(self, username, password, domain):
@@ -197,7 +225,12 @@ class VoIPManager:
         # # NAT
         # acc_cfg.natConfig.sipStunUse = ... 
         # acc_cfg.natConfig.mediaStunUse = ... 
-        acc_cfg.natConfig.iceEnabled = True
+        # `acc_cfg.natConfig.iceEnabled = True` is setting the ICE (Interactive Connectivity
+        # Establishment) feature to be enabled in the SIP account configuration. ICE is a technique
+        # used in VoIP (Voice over Internet Protocol) communications to establish a connection between
+        # two parties even when they are behind NAT (Network Address Translation) devices or
+        # firewalls.
+        # acc_cfg.natConfig.iceEnabled = True
         # acc_cfg.natConfig.iceAggressiveNomination = ...
         # acc_cfg.natConfig.iceAlwaysUpdate = ...
         # acc_cfg.natConfig.iceMaxHostCands = ...
