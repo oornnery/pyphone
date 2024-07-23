@@ -96,7 +96,7 @@ class UaConfig(pj.UaConfig):
         else:
             self.threadCnt = 0
             self.mainThreadCnt = True
-        self.userAgent = f"pyphone-pjsua2"
+        # self.userAgent = f"pyphone-pjsua2"
         self.maxCalls = 4
 
 
@@ -133,7 +133,7 @@ class EpConfig(pj.EpConfig):
 class TransportConfig(pj.TransportConfig):
     def __init__(self):
         super().__init__()
-        self.port = 10060
+        self.port = 0
         self.randomizePort = True
         self.publicAddress = "0.0.0.0"
         self.boundAddress = "0.0.0.0"
@@ -216,12 +216,7 @@ class AccountConfig(pj.AccountConfig):
         # # NAT
         # self.natConfig.sipStunUse = ... 
         # self.natConfig.mediaStunUse = ... 
-        # `self.natConfig.iceEnabled = True` is setting the ICE (Interactive Connectivity
-        # Establishment) feature to be enabled in the SIP account configuration. ICE is a technique
-        # used in VoIP (Voice over Internet Protocol) communications to establish a connection between
-        # two parties even when they are behind NAT (Network Address Translation) devices or
-        # firewalls.
-        # self.natConfig.iceEnabled = True
+        self.natConfig.iceEnabled = False
         # self.natConfig.iceAggressiveNomination = ...
         # self.natConfig.iceAlwaysUpdate = ...
         # self.natConfig.iceMaxHostCands = ...
@@ -247,6 +242,37 @@ class Account(pj.Account):
         )
 
 
+
+
+
+class Call(pj.Call):
+    def __init__(self, acc, call_id=pj.PJSUA_INVALID_ID):
+        super().__init__(acc, call_id)
+
+
+    def on_call_media_state(self, prm):
+        # Obter a mídia de áudio da chamada
+        aud_med = self.get_audio_media(-1)
+
+        # Verificar se a mídia de áudio é válida
+        if aud_med is None:
+            print("Failed to get audio media")
+            return
+
+        # Obter a mídia de áudio do dispositivo de captura (microfone)
+        try:
+            capture_med = Endpoint.instance().aud_dev_manager().get_capture_dev_media()
+        except Exception as e:
+            print(f"Failed to get capture device media: {e}")
+            return
+
+        # Conectar a mídia de captura à mídia da chamada
+        print("Starting audio transmission from microphone...")
+        capture_med.start_transmit(aud_med)
+        print("Audio transmission started.")
+
+
+
 class VoIPManager(Endpoint):
     def __init__(self):
         super().__init__()
@@ -254,7 +280,7 @@ class VoIPManager(Endpoint):
         # SIP account
         self.acc = Account()
         self.prm = pj.CallOpParam()
-        self.call = pj.Call(self.acc)
+        self.call = Call(self.acc)
 
 
     def register(self, username, password, domain):
