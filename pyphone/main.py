@@ -1,7 +1,11 @@
 import time
+import sys
 import dotenv
 import pjsua2 as pj
+import logging
 
+
+from enum import Enum, IntEnum
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -13,6 +17,8 @@ from rich.text import Text
 
 console = Console()
 env = dotenv.dotenv_values(".env")
+
+
 
 # @dataclass
 # class UaConfig:
@@ -66,182 +72,197 @@ env = dotenv.dotenv_values(".env")
 #     jbDiscardAlgo: 'pjmedia_jb_discard_algo'
 #     sndAutoCloseTime: int
 #     vidPreviewEnableNative: bool
+
+
 USE_THREADS = True
 
-class Call(pj.Call):
-    def __init__(self, acc, call_id=pj.PJSUA_INVALID_ID):
-        pj.Call.__init__(self, acc, call_id)
-
-    def onCallState(self, prm):
-        ci = self.getInfo()
-        logger.info(f"Call state: {ci.stateText}")
-        if ci.state == pj.PJSIP_INV_STATE_CONFIRMED:
-            self.setMediaState()
-
-    def onCallMediaState(self, prm):
-        logger.info("Media state changed")
-        self.setMediaState()
-
-    def setMediaState(self):
-        logger.info("Setting media state")
-        ci = self.getInfo()
-        for mi in ci.media:
-            if mi.type == pj.PJMEDIA_TYPE_AUDIO:
-                aud_med = self.getAudioMedia(mi.index)
-                if aud_med:
-                    logger.info(f"Setting audio media at index {mi.index}")
-                    ep.audDevManager().getCaptureDevMedia().startTransmit(aud_med)
-                    aud_med.startTransmit(ep.audDevManager().getPlaybackDevMedia())
+# Configuração de logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger('pjsua2')
 
 
-class VoIPManager:
+class SIP_TRANSPORT(IntEnum):
+    UDP = pj.PJSIP_TRANSPORT_UDP
+    TCP = pj.PJSIP_TRANSPORT_TCP
+    TLS = pj.PJSIP_TRANSPORT_TLS
+
+
+class UaConfig(pj.UaConfig):
     def __init__(self):
-        # Create and initialize the library
-        self.ep = pj.Endpoint()
-        self.ep.libCreate()
-        # Configure endpoint
-        ep_cfg = pj.EpConfig()
-        
-        ua_cfg = pj.UaConfig()
-        # System settings
+        super().__init__()
         if USE_THREADS:
-            ua_cfg.threadCnt = 1
-            ua_cfg.mainThreadCnt = False
+            self.threadCnt = 1
+            self.mainThreadCnt = False
         else:
-            ua_cfg.threadCnt = 0
-            ua_cfg.mainThreadCnt = True
-        
-        # Agent settings
-        version = self.ep.libVersion().full
-        
-        ua_cfg.userAgent = f"pyphone-{version}"
-        ua_cfg.maxCalls = 4
-        
-        ep_cfg.uaConfig = ua_cfg
-        # Logs
-        #ep_cfg.logConfig.writer = self.logger
-        ep_cfg.logConfig.filename = "logs/pyphone.log"
-        ep_cfg.logConfig.fileFlags = pj.PJ_O_APPEND
-        ep_cfg.logConfig.level = 5
-        ep_cfg.logConfig.consoleLevel = 5
+            self.threadCnt = 0
+            self.mainThreadCnt = True
+        self.userAgent = f"pyphone-pjsua2"
+        self.maxCalls = 4
 
-        # Network settings
-        
-        # Media setting
-        media_cfg = pj.MediaConfig()
-        media_cfg.clockRate = 16000
-        media_cfg.channelCount = 1
-        media_cfg.ptime = 20
-        media_cfg.threadCnt = 1
-        media_cfg.quality = 10
-        media_cfg.ecTailLen = 0
-        media_cfg.threadPrio = 0
-        
-        ep_cfg.medConfig = media_cfg
-        
-    
-        # Init library
-        self.ep.libInit(ep_cfg)
-        
-        # Ajuste das configurações do dispositivo de áudio
-        aud_dev_manager = self.ep.audDevManager()
-        dev_info = aud_dev_manager.getDevInfo(0)  # Assume que 0 é o ID do dispositivo padrão
-        dev_info.input_latency = 100
-        dev_info.output_latency = 100
-        
-        self.ep.audDevManager = aud_dev_manager
-        
-        # Set codec
-        self.ep.codecSetPriority("PCMU/8000", 255)
-        self.ep.codecSetPriority("PCMA/8000", 254)
-        
+
+class LogConfig(pj.LogConfig):
+    def __init__(self):
+        super().__init__()
+       #self.logConfig.writer = self.logger
+        self.filename = "logs/pyphone.log"
+        self.fileFlags = pj.PJ_O_APPEND
+        self.level = 5
+        self.consoleLevel = 5
+
+
+class MediaConfig(pj.MediaConfig):
+    def __init__(self):
+        super().__init__()
+        self.clockRate = 16000
+        self.channelCount = 1
+        self.ptime = 20
+        self.threadCnt = 1
+        self.quality = 10
+        self.ecTailLen = 0
+        self.threadPrio = 0
+
+
+class EpConfig(pj.EpConfig):
+    def __init__(self):
+        super().__init__()
+        self.uaConfig = UaConfig()
+        self.logConfig = LogConfig()
+        self.medConfig = MediaConfig()
+
+
+class TransportConfig(pj.TransportConfig):
+    def __init__(self):
+        super().__init__()
+        self.port = 10060
+        self.randomizePort = True
+        self.publicAddress = "0.0.0.0"
+        self.boundAddress = "0.0.0.0"
+        # self.qosType = 1
+        # self.qosParams = pj.QosParams()
+
+
+class Endpoint(pj.Endpoint):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.libCreate()
+        self.libInit(
+            prmEpConfig=EpConfig()
+        )
+
+        self.codecSetPriority("PCMU/8000", 255)
+        self.codecSetPriority("PCMA/8000", 254)
         # Create SIP transport. Error handling sample is shown
-        udp_config = pj.PJSIP_TRANSPORT_UDP
-        tcp_config = pj.PJSIP_TRANSPORT_TCP
-        tls_config = pj.PJSIP_TRANSPORT_TLS
+
         # Configuração de transporte
-        sip_transport_config = pj.TransportConfig()
-        # sip_transport_config.port = 5061  # Porta padrão para SIP
-        sip_transport_config.randomizePort = True  # Não randomizar a porta
-        sip_transport_config.publicAddress = "201.68.208.87"  # Endereço público
-        sip_transport_config.boundAddress = "0.0.0.0"  # Endereço local
-        # sip_transport_config.qosType = 1  # Exemplo de QoS
-        # sip_transport_config.qosParams = pj.QosParams()  # Supondo que você tenha 
-        
-        self.transport = self.ep.transportCreate(
-            udp_config, 
-            sip_transport_config
+
+        self.transportCreate(
+            SIP_TRANSPORT.UDP, 
+            TransportConfig()
             )
         # start the library
-        self.ep.libStart()
-        # SIP account
-        self.acc = pj.Account()
-        self.prm = pj.CallOpParam()
-        self.call = Call(self.acc)
+        self.libStart()
 
 
-    def register(self, username, password, domain):
-        # TODO: Mover para uma dataclass
-        acc_cfg = pj.AccountConfig()
-        
+class AuthCredInfo(pj.AuthCredInfo):
+    def __init__(self, username: str, password: str, *args):
+        super().__init__(*args)
+        self.scheme = "digest"
+        self.username = username
+        self.realm = "*"
+        self.username = username
+        self.data = password
+
+
+class AccountConfig(pj.AccountConfig):
+    def __init__(self, username: str, password: str, domain: str, *args):
+        super().__init__(*args)
         # Basic settings
-        acc_cfg.priority = 0
-        acc_cfg.idUri = f"sip:{username}@{domain}"
-        acc_cfg.regConfig.registrarUri = f"sip:{username}@{domain}"
-        acc_cfg.regConfig.registerOnAdd = True
+        self.priority = 0
+        self.idUri = f"sip:{username}@{domain}"
+        self.regConfig.registrarUri = f"sip:{username}@{domain}"
+        self.regConfig.registerOnAdd = True
         
         # Create the account
-        cred = pj.AuthCredInfo()
-        cred.scheme = "digest"
-        cred.username = username
-        cred.realm = "*"
-        cred.username = username
-        cred.data = password
-        acc_cfg.sipConfig.authCreds.append(cred)
+        self.sipConfig.authCreds.append(
+            AuthCredInfo(
+                username=username,
+                password=password
+            )
+        )
         
-        # acc_cfg.sipConfig.proxies = []
-        acc_cfg.sipConfig.outboundProxy = f"sip:{username}@{domain}"
+        # self.sipConfig.proxies = []
+        self.sipConfig.outboundProxy = f"sip:{username}@{domain}"
 
         # SIP features
-        # acc_cfg.callConfig.prackUse = ...
-        # acc_cfg.callConfig.timerUse = ...
-        # acc_cfg.callConfig.timerSessExpiresSec = ...
-        # acc_cfg.presConfig.publishEnabled = ...
-        # acc_cfg.mwiConfig.enabled = ...
-        # acc_cfg.natConfig.contactRewriteUse = ... 
-        # acc_cfg.natConfig.viaRewriteUse = ... 
-        # acc_cfg.natConfig.sdpNatRewriteUse = ... 
-        # acc_cfg.natConfig.sipOutboundUse = ... 
-        # acc_cfg.natConfig.udpKaIntervalSec = ... 
+        # self.callConfig.prackUse = ...
+        # self.callConfig.timerUse = ...
+        # self.callConfig.timerSessExpiresSec = ...
+        # self.presConfig.publishEnabled = ...
+        # self.mwiConfig.enabled = ...
+        # self.natConfig.contactRewriteUse = ... 
+        # self.natConfig.viaRewriteUse = ... 
+        # self.natConfig.sdpNatRewriteUse = ... 
+        # self.natConfig.sipOutboundUse = ... 
+        # self.natConfig.udpKaIntervalSec = ... 
 
         # # Media
-        # acc_cfg.mediaConfig.transportConfig.port = ...
-        # acc_cfg.mediaConfig.transportConfig.portRange = ...
-        # acc_cfg.mediaConfig.lockCodecEnabled = ...
-        # acc_cfg.mediaConfig.srtpUse = ...
-        # acc_cfg.mediaConfig.srtpSecureSignaling = ...
-        # acc_cfg.mediaConfig.ipv6Use = ... # pj.PJSUA_IPV6_ENABLED or pj.PJSUA_IPV6_DISABLED
+        # self.mediaConfig.transportConfig.port = ...
+        # self.mediaConfig.transportConfig.portRange = ...
+        # self.mediaConfig.lockCodecEnabled = ...
+        # self.mediaConfig.srtpUse = ...
+        # self.mediaConfig.srtpSecureSignaling = ...
+        # self.mediaConfig.ipv6Use = ... # pj.PJSUA_IPV6_ENABLED or pj.PJSUA_IPV6_DISABLED
 
         # # NAT
-        # acc_cfg.natConfig.sipStunUse = ... 
-        # acc_cfg.natConfig.mediaStunUse = ... 
-        # `acc_cfg.natConfig.iceEnabled = True` is setting the ICE (Interactive Connectivity
+        # self.natConfig.sipStunUse = ... 
+        # self.natConfig.mediaStunUse = ... 
+        # `self.natConfig.iceEnabled = True` is setting the ICE (Interactive Connectivity
         # Establishment) feature to be enabled in the SIP account configuration. ICE is a technique
         # used in VoIP (Voice over Internet Protocol) communications to establish a connection between
         # two parties even when they are behind NAT (Network Address Translation) devices or
         # firewalls.
-        # acc_cfg.natConfig.iceEnabled = True
-        # acc_cfg.natConfig.iceAggressiveNomination = ...
-        # acc_cfg.natConfig.iceAlwaysUpdate = ...
-        # acc_cfg.natConfig.iceMaxHostCands = ...
-        # acc_cfg.natConfig.turnEnabled = ... 
-        # acc_cfg.natConfig.turnServer = ... 
-        # acc_cfg.natConfig.turnConnType = ... 
-        # acc_cfg.natConfig.turnUserName = ... 
-        # acc_cfg.natConfig.turnPasswordType = ...
-        # acc_cfg.natConfig.turnPassword = ... 
-        
-        self.acc.create(acc_cfg)
+        # self.natConfig.iceEnabled = True
+        # self.natConfig.iceAggressiveNomination = ...
+        # self.natConfig.iceAlwaysUpdate = ...
+        # self.natConfig.iceMaxHostCands = ...
+        # self.natConfig.turnEnabled = ... 
+        # self.natConfig.turnServer = ... 
+        # self.natConfig.turnConnType = ... 
+        # self.natConfig.turnUserName = ... 
+        # self.natConfig.turnPasswordType = ...
+        # self.natConfig.turnPassword = ... 
+
+
+class Account(pj.Account):
+    def __init__(self):
+        super().__init__()
+
+    def register(self, username, password, domain):
+        self.create(
+            AccountConfig(
+                username=username,
+                password=password,
+                domain=domain
+            )
+        )
+
+
+class VoIPManager(Endpoint):
+    def __init__(self):
+        super().__init__()
+
+        # SIP account
+        self.acc = Account()
+        self.prm = pj.CallOpParam()
+        self.call = pj.Call(self.acc)
+
+
+    def register(self, username, password, domain):
+        self.acc.register(
+            username=username,
+            password=password,
+            domain=domain,
+        )
     
     def set_presence_status(self):
         status = pj.PresenceStatus()
@@ -255,8 +276,11 @@ class VoIPManager:
         return self.acc.getInfo()
     
     def make_call(self, destination):
+        prm = pj.CallOpParam(True)
+        prm.opt.audioCount = 1
+        prm.opt.videoCount = 0
         dest_uri = f"sip:{destination}@{env.get('DOMAIN')}"
-        return self.call.makeCall(dest_uri, self.prm)
+        return self.call.makeCall(dest_uri, prm)
 
     def hangup(self):
         self.prm.statusCode = pj.PJSIP_SC_REQUEST_TERMINATED
@@ -285,7 +309,8 @@ class VoIPManager:
 if __name__ == "__main__":
     voip_manager = VoIPManager()
     voip_manager.register(env.get('USERNAME'), env.get('PASSWORD'), env.get('DOMAIN'))
-    
+    voip_manager.set_presence_status()
+
     def acc_info(vp: VoIPManager):
         console.print(
             Panel(
@@ -304,7 +329,8 @@ if __name__ == "__main__":
             )
         )
     acc_info(voip_manager)
-    input("Pressione Enter para fazer uma chamada...")
+
+    # input("Pressione Enter para fazer uma chamada...")
     voip_manager.make_call(env.get('DESTINATION'))
     
     input("Pressione Enter para encerrar a chamada...")
