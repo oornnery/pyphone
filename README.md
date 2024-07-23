@@ -12,10 +12,7 @@ Install dependencies (Ubuntu 22.04 LTS).
 
 ```shell
 sudo apt update
-sudo apt install swig build-essential python3-dev libasound2-dev \
-    libssl3 libssl-dev ffmpeg libv4l-dev libv4l-0 \
-    alsa-base alsa-oss libyuv0 libyuv-dev libsdl2-2.0-0 libsdl2-dev \
-    libx264-163  libx264-dev
+sudo apt install swig build-essential python3-dev libasound2-dev libssl3 libssl-dev ffmpeg libv4l-dev libv4l-0 alsa-oss alsa-utils  pulseaudio pulseaudio-utils libyuv0 libyuv-dev libsdl2-2.0-0 libsdl2-dev libx264-dev
 ```
 
 Build PJSIP.
