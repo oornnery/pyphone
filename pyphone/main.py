@@ -3,6 +3,7 @@ import sys
 import dotenv
 import pjsua2 as pj
 import logging
+import random
 
 
 from enum import Enum, IntEnum
@@ -18,231 +19,184 @@ from rich.text import Text
 console = Console()
 env = dotenv.dotenv_values(".env")
 
-
-
-# @dataclass
-# class UaConfig:
-#     maxCalls: Optional[int] = 2
-#     userAgent: Optional[str] = "pyphone"
-#     threadCnt: Optional[int] = 0
-#     mainThreadOnly: Optional[bool] = False
-#     nameserver: Optional[List[str]] = []
-#     outboundProxies: Optional[List[str]] = []
-#     stunServer: Optional[List[str]] = []
-#     stunTryIpv6: Optional[bool] = False
-#     stunIgnoreFailure: Optional[bool] = True
-#     natTypeInSdp: Optional[int] = 2
-#     mwiUnsolicitedEnabled: Optional[bool] = False
-#     enableUpnp: Optional[bool] = False
-#     upnpIfName: Optional[str] = ""
-
-# @dataclass
-# class LogConfig:
-#     msgLogging: int
-#     level: int
-#     consoleLevel: int
-#     decor: int
-#     filename: str
-#     fileFlags: int
-#     writer: 'LogWriter'  # Assuming LogWriter is another dataclass or custom class
-
-# @dataclass
-# class MediaConfig:
-#     clockRate: int
-#     sndClockRate: int
-#     channelCount: int
-#     audioFramePtime: int
-#     maxMediaPorts: int
-#     hasIoqueue: bool
-#     threadCnt: int
-#     quality: int
-#     ptime: int
-#     noVad: bool
-#     ilbcMode: int
-#     txDropPct: int
-#     rxDropPct: int
-#     ecOptions: int
-#     ecTailLen: int
-#     sndRecLatency: int
-#     sndPlayLatency: int
-#     jbInit: int
-#     jbMinPre: int
-#     jbMaxPre: int
-#     jbMax: int
-#     jbDiscardAlgo: 'pjmedia_jb_discard_algo'
-#     sndAutoCloseTime: int
-#     vidPreviewEnableNative: bool
-
-
-USE_THREADS = True
-
 # Configuração de logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger('pjsua2')
 
+class LogLevelEnum(IntEnum):
+    ERROR = 1
+    WARNING = 2
+    INFO = 3
+    TRACER = 5
 
-class SIP_TRANSPORT(IntEnum):
+
+class SipTransportEnum(IntEnum):
     UDP = pj.PJSIP_TRANSPORT_UDP
     TCP = pj.PJSIP_TRANSPORT_TCP
     TLS = pj.PJSIP_TRANSPORT_TLS
 
 
-class UaConfig(pj.UaConfig):
-    def __init__(self):
-        super().__init__()
-        if USE_THREADS:
-            self.threadCnt = 1
-            self.mainThreadCnt = False
-        else:
-            self.threadCnt = 0
-            self.mainThreadCnt = True
-        # self.userAgent = f"pyphone-pjsua2"
-        self.maxCalls = 4
+class CodecEnum(Enum):
+    PCMA = "PCMA/8000"
+    PCMU = "PCMU/8000"
 
 
-class LogConfig(pj.LogConfig):
-    def __init__(self):
-        super().__init__()
-       #self.logConfig.writer = self.logger
-        self.filename = "logs/pyphone.log"
-        self.fileFlags = pj.PJ_O_APPEND
-        self.level = 5
-        self.consoleLevel = 5
+class LogFlagsEnum(IntEnum):
+    APPEND = pj.PJ_O_APPEND
 
 
-class MediaConfig(pj.MediaConfig):
-    def __init__(self):
-        super().__init__()
-        self.clockRate = 16000
-        self.channelCount = 1
-        self.ptime = 20
-        self.threadCnt = 1
-        self.quality = 10
-        self.ecTailLen = 0
-        self.threadPrio = 0
+@dataclass
+class CodecConfig:
+    codec: CodecEnum
+    priority: int
 
 
-class EpConfig(pj.EpConfig):
-    def __init__(self):
-        super().__init__()
-        self.uaConfig = UaConfig()
-        self.logConfig = LogConfig()
-        self.medConfig = MediaConfig()
-
-
-class TransportConfig(pj.TransportConfig):
-    def __init__(self):
-        super().__init__()
-        self.port = 0
-        self.randomizePort = True
-        self.publicAddress = "0.0.0.0"
-        self.boundAddress = "0.0.0.0"
-        # self.qosType = 1
-        # self.qosParams = pj.QosParams()
+@dataclass
+class EndpointConfig:
+    user_agent: str = field(default="pyphone-pjsua2")
+    max_calls: int = field(default=4)
+    use_threads: bool = field(default=True)
+    log_console_level: LogLevelEnum = field(default=LogLevelEnum.INFO)
+    log_path: str = field(default="logs/pyphone.log")
+    log_level: LogLevelEnum = field(default=LogLevelEnum.TRACER)
+    log_flags: LogFlagsEnum = field(default=LogFlagsEnum.APPEND)
+    med_clock_rate: int = field(default=16000)
+    med_channel_count: int = field(default=1)
+    med_ptime: int = field(default=20)
+    med_quality: int = field(default=10)
+    codec_list: List[CodecConfig] = field(default_factory=list)
+    transport_port: int = field(default=5060)
+    transport_random_port: bool = field(default=False)
+    transport_protocol: SipTransportEnum = field(default=SipTransportEnum.UDP)
+    transport_public_address: str = field(default="0.0.0.0")
+    transport_bound_address: str = field(default="0.0.0.0")
 
 
 class Endpoint(pj.Endpoint):
-    def __init__(self, *args):
+    def __init__(self, ep_cfg: EndpointConfig, *args):
         super().__init__(*args)
         self.libCreate()
-        self.libInit(
-            prmEpConfig=EpConfig()
-        )
-
-        self.codecSetPriority("PCMU/8000", 255)
-        self.codecSetPriority("PCMA/8000", 254)
-        # Create SIP transport. Error handling sample is shown
-
-        # Configuração de transporte
-
+        self.cfg = pj.EpConfig()
+        # User agent configuration
+        ua_cfg = pj.UaConfig()
+        if ep_cfg.use_threads:
+            ua_cfg.threadCnt = 1
+            ua_cfg.mainThreadCnt = False
+        else:
+            ua_cfg.threadCnt = 0
+            ua_cfg.mainThreadCnt = True
+        ua_cfg.userAgent = ep_cfg.user_agent
+        ua_cfg.maxCalls = ep_cfg.max_calls
+        # Set configuration
+        self.cfg.uaConfig = ua_cfg
+        # Log configuration
+        log_cfg = pj.LogConfig()
+        #log_cfg.logConfig.writer = self.logger
+        log_cfg.filename = ep_cfg.log_path
+        log_cfg.fileFlags = ep_cfg.log_flags
+        log_cfg.level = ep_cfg.log_level
+        log_cfg.consoleLevel = ep_cfg.log_console_level
+        # Set configuration
+        self.cfg.logConfig = log_cfg
+        # Media configuration
+        med_cfg = pj.MediaConfig()
+        med_cfg.clockRate = ep_cfg.med_clock_rate
+        med_cfg.channelCount = ep_cfg.med_channel_count
+        med_cfg.ptime = ep_cfg.med_ptime
+        med_cfg.quality = ep_cfg.med_quality
+        med_cfg.ecTailLen = 0
+        med_cfg.threadCnt = 1
+        med_cfg.threadPrio = 0
+        # Set configuration
+        self.cfg.medConfig = med_cfg
+        # Init library        
+        self.libInit(self.cfg)
+        # Codec configuration
+        for codec in ep_cfg.codec_list:
+            self.codecSetPriority(codec.codec, codec.priority)
+        # Create SIP transport.
+        transport_cfg = pj.TransportConfig()
+        transport_cfg.port = ep_cfg.transport_port
+        transport_cfg.randomizePort = ep_cfg.transport_random_port
+        transport_cfg.publicAddress = ep_cfg.transport_public_address
+        transport_cfg.boundAddress = ep_cfg.transport_bound_address
+        # transport_cfg.qosType = 1
+        # transport_cfg.qosParams = pj.QosParams()
+        # Create transport
         self.transportCreate(
-            SIP_TRANSPORT.UDP, 
-            TransportConfig()
+            ep_cfg.transport_protocol, 
+            transport_cfg
             )
         # start the library
         self.libStart()
 
 
-class AuthCredInfo(pj.AuthCredInfo):
-    def __init__(self, username: str, password: str, *args):
-        super().__init__(*args)
-        self.scheme = "digest"
-        self.username = username
-        self.realm = "*"
-        self.username = username
-        self.data = password
+@dataclass
+class RegisterConfig:
+    username: str
+    password: str
+    domain: str
+    port: int = field(default=5060)
+    priority: int = field(default=0)
+    set_register: bool = field(default=True)
+    # TODO: implementar outros campos da class AccountConfig
+    
+    def id_uri(self):
+        return f"sip:{self.username}@{self.domain}"
 
-
-class AccountConfig(pj.AccountConfig):
-    def __init__(self, username: str, password: str, domain: str, *args):
-        super().__init__(*args)
-        # Basic settings
-        self.priority = 0
-        self.idUri = f"sip:{username}@{domain}"
-        self.regConfig.registrarUri = f"sip:{username}@{domain}"
-        self.regConfig.registerOnAdd = True
-        
-        # Create the account
-        self.sipConfig.authCreds.append(
-            AuthCredInfo(
-                username=username,
-                password=password
-            )
-        )
-        
-        # self.sipConfig.proxies = []
-        self.sipConfig.outboundProxy = f"sip:{username}@{domain}"
-
-        # SIP features
-        # self.callConfig.prackUse = ...
-        # self.callConfig.timerUse = ...
-        # self.callConfig.timerSessExpiresSec = ...
-        # self.presConfig.publishEnabled = ...
-        # self.mwiConfig.enabled = ...
-        # self.natConfig.contactRewriteUse = ... 
-        # self.natConfig.viaRewriteUse = ... 
-        # self.natConfig.sdpNatRewriteUse = ... 
-        # self.natConfig.sipOutboundUse = ... 
-        # self.natConfig.udpKaIntervalSec = ... 
-
-        # # Media
-        # self.mediaConfig.transportConfig.port = ...
-        # self.mediaConfig.transportConfig.portRange = ...
-        # self.mediaConfig.lockCodecEnabled = ...
-        # self.mediaConfig.srtpUse = ...
-        # self.mediaConfig.srtpSecureSignaling = ...
-        # self.mediaConfig.ipv6Use = ... # pj.PJSUA_IPV6_ENABLED or pj.PJSUA_IPV6_DISABLED
-
-        # # NAT
-        # self.natConfig.sipStunUse = ... 
-        # self.natConfig.mediaStunUse = ... 
-        self.natConfig.iceEnabled = False
-        # self.natConfig.iceAggressiveNomination = ...
-        # self.natConfig.iceAlwaysUpdate = ...
-        # self.natConfig.iceMaxHostCands = ...
-        # self.natConfig.turnEnabled = ... 
-        # self.natConfig.turnServer = ... 
-        # self.natConfig.turnConnType = ... 
-        # self.natConfig.turnUserName = ... 
-        # self.natConfig.turnPasswordType = ...
-        # self.natConfig.turnPassword = ... 
+    def registrar_uri(self):
+        return f"sip:{self.username}"
 
 
 class Account(pj.Account):
     def __init__(self):
         super().__init__()
+        self.randId = random.randint(1, 9999)
+        self.cfg =  pj.AccountConfig()
+        self.buddyList = []
 
-    def register(self, username, password, domain):
-        self.create(
-            AccountConfig(
-                username=username,
-                password=password,
-                domain=domain
-            )
-        )
+    def add_account(self, reg_cfg: RegisterConfig):
+        self.cfg.priority = 0
+        self.cfg.idUri = reg_cfg.id_uri()
+        self.cfg.regConfig.registrarUri = reg_cfg.registrar_uri()
+        self.cfg.regConfig.registerOnAdd = reg_cfg.set_register
+        # Create auth credentials
+        auth_cred = pj.AuthCredInfo()
+        auth_cred.scheme = "digest"
+        auth_cred.username = reg_cfg.username
+        auth_cred.realm = "*"
+        auth_cred.dataType = 0
+        auth_cred.data = reg_cfg.password
+        # Add auth credentials
+        self.cfg.sipConfig.authCreds.append(auth_cred)
 
 
+    def set_registration(self, status: bool = True):
+        self.setRegistration(status)
 
+    def set_presence_status(self):
+        status = pj.PresenceStatus()
+        status.status = pj.PJSUA_BUDDY_STATUS_ONLINE
+        self.setOnlineStatus(status)
+
+    def unset_registration(self):
+        self.shutdown()
+
+    def account_info(self):
+        return self.acc.getInfo()
+
+    def onRegState(self, prm):
+        #TODO: implementar estado de registro
+        #TODO: Exebir estado de registro na tela
+        pass
+
+    def onIncomingCall(self, prm):
+        c = pj.Call(self, call_id=prm.callId)
+        call_prm = pj.CallOpParam()
+        call_prm.statusCode = 180
+        c.answer(call_prm)
+        ci = c.getInfo()
+        #TODO: implementar recebimento de chamadas.
 
 
 class Call(pj.Call):
@@ -282,26 +236,8 @@ class VoIPManager(Endpoint):
         self.prm = pj.CallOpParam()
         self.call = Call(self.acc)
 
-
-    def register(self, username, password, domain):
-        self.acc.register(
-            username=username,
-            password=password,
-            domain=domain,
-        )
-    
-    def set_presence_status(self):
-        status = pj.PresenceStatus()
-        status.status = pj.PJSUA_BUDDY_STATUS_ONLINE
-        self.acc.setOnlineStatus(status)
-
-    def unregister(self):
-        self.acc.shutdown()
-
-    def account_info(self):
-        return self.acc.getInfo()
-    
     def make_call(self, destination):
+        #TODO: Mover para class call
         prm = pj.CallOpParam(True)
         prm.opt.audioCount = 1
         prm.opt.videoCount = 0
@@ -309,6 +245,7 @@ class VoIPManager(Endpoint):
         return self.call.makeCall(dest_uri, prm)
 
     def hangup(self):
+        #TODO: Mover para class call
         self.prm.statusCode = pj.PJSIP_SC_REQUEST_TERMINATED
         self.call.hangup(self.prm)
 
@@ -318,9 +255,11 @@ class VoIPManager(Endpoint):
         pass
     
     def call_info(self):
+        #TODO: Mover para class call
         return self.call.getInfo()
     
     def quit(self):
+        #TODO: Mover para endpoint
         if self.call.getInfo().state != pj.PJSIP_INV_STATE_DISCONNECTED:
             self.hangup()
         # if self.acc.calls.count > 0:
