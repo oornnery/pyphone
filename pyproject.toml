@@ -10,7 +10,6 @@ python = "^3.10"
 rich = "^13.7.1"
 textual = "^0.56.4"
 python-dotenv = "^1.0.1"
-pjsua2 = {path = "pjproject-2.14.1/pjsip-apps/src/swig/python"}
 
 
 [build-system]
