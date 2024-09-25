@@ -143,34 +143,30 @@ class From:
 class To:
     user: str
     address: str
-    port: str
 
     def __str__(self) -> str:
-        return f'To: <{self.user}@{self.address}:{self.port}>\r\n'
+        return f'To: <{self.user}@{self.address}>\r\n'
 
     @staticmethod
     def parser(message: str) -> 'To':
         address = ''
-        port = ''
-        transport = ''
-        return To(address=address, port=port, transport=transport)
+        user = ''
+        return To(user=user, address=address)
 
 
 @dataclass
 class Contact:
     user: str
     address: str
-    port: str
 
     def __str__(self) -> str:
-        return f'Contact: <{self.user}@{self.address}:{self.port}>\r\n'
+        return f'Contact: <{self.user}@{self.address}>\r\n'
 
     @staticmethod
     def parser(message: str) -> 'Contact':
         address = ''
-        port = ''
-        transport = ''
-        return Contact(address=address, port=port, transport=transport)
+        user=''
+        return Contact(address=address, user=user)
 
 
 @dataclass
@@ -242,10 +238,10 @@ class MaxForwards:
 
 @dataclass
 class Allow:
-    allowed_methods: str
+    allowed_methods: List[SIPMethod]
 
     def __str__(self) -> str:
-        allow = ', '.join([a for a in SIPMethod.__dict__.values()])
+        allow = ', '.join([a.value for a in self.allowed_methods])
         return f'Allow: {allow}\r\n'
 
     @staticmethod

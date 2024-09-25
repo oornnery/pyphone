@@ -1,19 +1,75 @@
-from pyphone.core.message import SIPRequest, SIPResponse, SIPMethod, SIPStatusCode, SIPHeader, SIPBody, RequestLine, StatusLine
-from pyphone.core.user import User
+from pyphone.core.message import (
+    SIPRequest,
+    SIPResponse,
+    SIPMethod,
+    SIPStatusCode,
+    SIPHeader,
+    SIPBody,
+    RequestLine,
+    StatusLine,
+    Uri,
+    Via,
+    From,
+    UserAgent,
+    To,
+    Contact,
+    CSeq,
+    CallId,
+    Allow,
+    SessionExpires,
+    ContentLength,
+    MaxForwards,
+)
 from pyphone.core.session import Session
 
+
 class Dialog:
-    def __init__(self, user: User, session: Session) -> None:
-        self.user = user
+    def __init__(self, session: Session) -> None:
         self.session = session
 
-    def genate_register(self) -> SIPRequest:
+    def generate_register(self) -> SIPRequest:
+        req_line = RequestLine(
+            method=SIPMethod.REGISTER,
+            request_uri=Uri(
+                user=self.session.user.username,
+                address=self.session.user.domain
+                )
+            )        
         headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.REGISTER)        
+        headers.via.append(Via(
+            transport=self.session.transport_type,
+            address=self.session.transport.local_address,
+            port=self.session.transport.local_port
+            ))
+        headers.from_ = From(
+            user=self.session.user.username,
+            address=self.session.user.domain,
+            port=self.session.user.port
+            )
+        headers.to = To(
+            user=self.session.user.username,
+            address=self.session.user.domain,
+            )
+        headers.user_agent = UserAgent(self.session.user.display_info)
+        headers.cseq = CSeq(1, 'REGISTER')
+        headers.call_id = CallId(self.session.call_id)
+        headers.contact = Contact(
+            user=self.session.user.username,
+            address=self.session.user.domain
+        )
+        headers.allow = Allow(
+            SIPMethod.INVITE,
+            SIPMethod.ACK,
+            SIPMethod.BYE,
+            SIPMethod.CANCEL,
+        )
+        headers.session_expires = SessionExpires('300')
+        headers.content_length = ContentLength('0')
+        headers.max_forwards = MaxForwards('70')
         req = SIPRequest(
             request_line=req_line,
             header=headers,
-        )        
+        )
         return req
     
     def generate_invite(self, response: SIPResponse = None) -> SIPRequest:
@@ -120,3 +176,9 @@ class Dialog:
                 return self.generate_bye(message)
             case _:
                 return self.generate_info(message)
+
+
+if __name__ == '__main__':
+    
+    s = Session()
+    dg = Dialog()
