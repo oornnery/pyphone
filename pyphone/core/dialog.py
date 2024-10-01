@@ -1,184 +1,130 @@
-from pyphone.core.message import (
-    SIPRequest,
-    SIPResponse,
-    SIPMethod,
-    SIPStatusCode,
-    SIPHeader,
-    SIPBody,
-    RequestLine,
-    StatusLine,
-    Uri,
-    Via,
-    From,
-    UserAgent,
-    To,
-    Contact,
-    CSeq,
-    CallId,
-    Allow,
-    SessionExpires,
-    ContentLength,
-    MaxForwards,
+from typing import List, Union
+from rich.panel import Panel
+from uuid import uuid4
+
+from pyphone.core.utils import (
+    SipMethod,
+    SipStatusCode,
+    SIP_VERSION,
+    SIP_METHODS,
+    EOL
 )
-from pyphone.core.session import Session
+from pyphone.core.header import (
+    Header,
+    Uri,
+)
+from pyphone.core.payload import (
+    Body
+)
+from pyphone.transport import Transport
+from pyphone.user import User
+
+
+
+class SipRequest:
+    method: SipMethod
+    uri: Uri
+    header: Header
+    body: Body
+    def __str__(self) -> str:
+        return f"{self.method} {self.uri} SIP/2.0{EOL}{self.header}{EOL}{EOL}{self.body}"
+
+    def __rich__(self):
+        return Panel(self.__str__(), title="SIP Request", highlight=True, expand=False)
+
+    def to_bytes(self) -> bytes:
+        return str(self).encode()
+
+
+class SipResponse:
+    status_code: SipStatusCode
+    uri: Uri
+    header: Header
+    def __str__(self) -> str:
+        return f"{SIP_VERSION} {self.status_code}{EOL}{self.header}"
+
+    def __rich__(self):
+        return Panel(self.__str__(), title="SIP Response", highlight=True, expand=False)
+
+    def to_bytes(self) -> bytes:
+        return str(self).encode()
+
 
 
 class Dialog:
-    def __init__(self, session: Session) -> None:
-        self.session = session
+    def __init__(self):
+        self.transport: Transport = None
+        self.user: User = None
+        self._cseq = 0
+        self._call_id = None
+        self._branch = None
+        self._tag = None
+        self._via_uri = None
+        self._from_uri = None
+        self._to_uri = None
+        self._dialogs: List[Union[SipRequest, SipResponse]] = []
+        self._header = Header()
+        self._body = None
 
-    def generate_register(self) -> SIPRequest:
-        req_line = RequestLine(
-            method=SIPMethod.REGISTER,
-            request_uri=Uri(
-                user=self.session.user.username,
-                address=self.session.user.domain
-                )
-            )        
-        headers = SIPHeader()
-        headers.via.append(Via(
-            transport=self.session.transport_type,
-            address=self.session.transport.local_address,
-            port=self.session.transport.local_port
-            ))
-        headers.from_ = From(
-            user=self.session.user.username,
-            address=self.session.user.domain,
-            port=self.session.user.port
-            )
-        headers.to = To(
-            user=self.session.user.username,
-            address=self.session.user.domain,
-            )
-        headers.user_agent = UserAgent(self.session.user.display_info)
-        headers.cseq = CSeq(1, 'REGISTER')
-        headers.call_id = CallId(self.session.call_id)
-        headers.contact = Contact(
-            user=self.session.user.username,
-            address=self.session.user.domain
-        )
-        headers.allow = Allow(
-            SIPMethod.INVITE,
-            SIPMethod.ACK,
-            SIPMethod.BYE,
-            SIPMethod.CANCEL,
-        )
-        headers.session_expires = SessionExpires('300')
-        headers.content_length = ContentLength('0')
-        headers.max_forwards = MaxForwards('70')
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )
-        return req
+
+    @property
+    def cseq(self):
+        return self._cseq
+
+    @property
+    def call_id(self):
+        if not self._call_id:
+            self._call_id = f'{uuid4().hex}@{self.user.domain}'
+        return self._call_id
+
+    @property
+    def branch(self):
+        if not self._branch:
+            self._branch = f'z9hG4bK-{uuid4().hex}'
+        return self._branch
+
+    @property
+    def tag(self):
+        return f'{uuid4().hex}'[0:8]
+
+    @property
+    def via_uri(self) -> Uri:
+        if not self._via_uri:
+            self._via_uri = Uri(address=self.transport.public_address, port=self.transport.public_port)
+        return self._via_uri
     
-    def generate_invite(self, response: SIPResponse = None) -> SIPRequest:
-        headers = SIPHeader()
-        body = SIPBody()
-        req_line = RequestLine(method=SIPMethod.INVITE)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-            body=body
-        )        
-        return req
-
-    def generate_ack(self, response: SIPResponse) -> SIPResponse:
-        headers = SIPHeader()
-        req_line = StatusLine(status_code=SIPStatusCode.OK)        
-        req = SIPResponse(
-            req_line=req_line,
-            header=headers,
-        )        
-        return req
-
-    def generate_trying(self, response: SIPResponse) -> SIPResponse:
-        headers = SIPHeader()
-        req_line = StatusLine(status_code=SIPStatusCode.TRYING)        
-        req = SIPResponse(
-            req_line=req_line,
-            header=headers,
-        )
-        return req
+    @property
+    def from_uri(self) -> Uri:
+        if not self._from_uri:
+            self._from_uri = Uri(username=self.user.username, address=self.user.domain, port=self.user.port)
+        return self._from_uri
     
-    def generate_cancel(self, response: SIPResponse = None) -> SIPRequest:
-        headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.CANCEL)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )        
-        return req
-        
-    def generate_bye(self, response: SIPResponse = None) -> SIPRequest:
-        headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.BYE)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )        
-        return req
-        
-    def generate_info(self) -> SIPRequest:
-        headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.INFO)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )        
-        return req
-        
-    def generate_options(self) -> SIPRequest:
-        headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.OPTIONS)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )        
-        return req
-        
-    def generate_notify(self) -> SIPRequest:
-        headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.NOTIFY)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )        
-        return req
-        
-    def generate_subscribe(self) -> SIPRequest:
-        headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.SUBSCRIBE)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )        
-        return req
-        
-    def generate_update(self) -> SIPRequest:
-        headers = SIPHeader()
-        req_line = RequestLine(method=SIPMethod.UPDATE)        
-        req = SIPRequest(
-            request_line=req_line,
-            header=headers,
-        )        
-        return req
-
-    def process_dialog(self, message: SIPResponse) -> SIPRequest:        
-        match message.status_line.status_code:
-            case 100:
-                return self.generate_ack(message)
-            case 180:
-                return self.generate_ack(message)
-            case 487:
-                return self.generate_ack(message)
-            case 200:
-                return self.generate_bye(message)
-            case _:
-                return self.generate_info(message)
-
-
-if __name__ == '__main__':
+    @property
+    def to_uri(self) -> Uri:
+        if not self._to_uri:
+            self._to_uri = Uri(username=self.user.username, address=self.user.domain, port=self.user.port)
+        return self._to_uri
     
-    s = Session()
-    dg = Dialog()
+    @property
+    def contact_uri(self) -> Uri:
+        if not self._contact_uri:
+            self._contact_uri = Uri(address=self.transport.local_address, port=self.transport.local_port)
+        return self._contact_uri
+    
+    @property
+    def content_length(self) -> int:
+        if not self._body:
+            return 0
+        return len(str(self._body.to_bytes()))
+
+    def process_message(self, data, addr) -> Union[SipRequest, SipResponse]:
+        pass
+
+    def gen_invite(self) -> SipRequest:
+        pass
+
+    def gen_register(self) -> SipRequest:
+        pass
+
+
+#TODO: implementar mecanismo de envio/recebimento de chamadas

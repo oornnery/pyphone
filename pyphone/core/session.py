@@ -1,21 +1,22 @@
 from pyphone.core.user import User
-from pyphone.core.transport import Transport, TransportType
-from pyphone.core.message import ParserMessage
+from pyphone.core.peer import Peer
+from pyphone.core.transport import Transport
 from pyphone.core.dialog import Dialog
 from pyphone.core.utils import log
 
 class Session:
-    def __init__(self, user: User, transport_type: TransportType = None) -> None:
-        self.transport_type = transport_type
+    stack = []
+    def __init__(self, user: User, transport: Transport) -> None:
+        self.transport = transport
         self.user = user
-        self.transport = Transport(self.transport_type, self.on_message)
-        self.dialog = Dialog(self.user)
+        self.peer = Peer(transport, self.on_message)
+        self.dialog = Dialog(transport, user)
 
     def start(self):
-        self.transport.start()
-    
+        self.peer.start()
+
     def stop(self):
-        self.transport.stop()
+        self.peer.stop()
 
     def __enter__(self):
         self.start()
@@ -28,7 +29,7 @@ class Session:
         return ""
     
     def on_message(self, data, addr):
-        pm = ParserMessage(data)
+        pm = self.dialog.process_dialog(data)
         if pm.is_request():
             m = self.dialog.process_request(pm)
             self.transport.send(m, addr)
@@ -37,3 +38,8 @@ class Session:
             self.transport.send(m, addr)
         log(f'Received {data} | from {addr}')
         log(m)
+
+
+if __name__ == '__main__':
+    dl = Session(User(), Transport())
+    dl.dialog.generate_register()
