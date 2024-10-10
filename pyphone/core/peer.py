@@ -1,16 +1,6 @@
 import socket
 import threading
 from typing import Callable
-from enum import Enum
-
-
-
-class PeerType(Enum):
-    UDP = 'udp'
-    TCP = 'tcp'
-    TLS = 'tls'
-    WS = 'ws'
-
 
 
 class Peer:

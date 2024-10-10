@@ -1,13 +1,20 @@
-from typing import Dict, List, AnyStr
+from typing import Union, Dict, List, AnyStr, Literal
 from dataclasses import dataclass, field
 from rich.panel import Panel
+import re
 
-from pyphone.core.utils import ProtocolType, SipMethod, SIP_VERSION, EOL, cl
+from pyphone.core.utils import (
+    cl,
+    ProtocolType,
+    SipMethod,
+    SIP_VERSION,
+    SIP_SCHEME,
+    EOL,
+    parser_uri_to_str
+    )
 
 __all__ = [
     'Header',
-    'Uri',
-    'Attr',
     'Via',
     'MaxForwards',
     'From',
@@ -26,39 +33,42 @@ __all__ = [
 
 # TODO: Refactor classes and group some objects.
 
-@dataclass
-class Uri:
-    username: AnyStr = field(default='')
-    address: AnyStr = field(default='')
-    port: int = field(default=0)
-
-    def __str__(self) -> str:
-        username = (f"sip:{self.username}@" if self.username else '')
-        port = (f":{self.port}" if self.port else '')
-        return f"{username}{self.address}{port}"
-
-
-@dataclass
-class Attr:
-    attr: Dict[str, str] = None
-    def __str__(self) -> str:
-        if not self.attr:
-            return ''
-        return ''.join([f';{k}={v}' for k, v in self.attr.items()])
 
 
 @dataclass
 class Via:
     """
     https://datatracker.ietf.org/doc/html/rfc3261#page-179
+    parameters such as "maddr","ttl", "received", and "branch"
+    Via: SIP/2.0/UDP erlang.bell-telephone.com:5060;branch=z9hG4bK87asdks7
+    Via: SIP/2.0/UDP 192.0.2.1:5060 ;received=192.0.2.207;branch=z9hG4bK77asjd
+    Via: SIP / 2.0 / UDP first.example.com: 4000;ttl=16;maddr=224.2.0.1 ;branch=z9hG4bKa7c6a8dlze.1
     """
-    via_uri: Uri
-    protocol: ProtocolType = ProtocolType.UDP
-    attr: Attr = None
-    def __str__(self) -> str:
-        attr = self.attr if self.attr else ''
-        return f'Via: {SIP_VERSION}/{self.protocol} {self.via_uri}{attr}'
+    address: AnyStr
+    port: int
+    scheme: AnyStr = field(default=SIP_SCHEME)
+    version: AnyStr = field(default=SIP_VERSION)
+    protocol: ProtocolType = field(default=ProtocolType.UDP)
+    params: Dict[Literal['maddr', 'ttl', 'received', 'branch'], str] = None
 
+    def __str__(self) -> str:
+        _uri = parser_uri_to_str(address=self.address, port=self.port, params=self.params)
+        return f'Via: {self.scheme.upper()}/{self.version}/{self.protocol} {_uri}'
+
+    @staticmethod
+    def parser(message: str) -> 'Via':
+        _syntax = re.compile(r'''
+        Via:\s
+        (?P<scheme>\w+)/(?P<version>\d+\.\d+)/(?P<protocol>\w+)
+        \s
+        (?P<address>[^:]+)
+        (?::(?P<port>\d+))?
+        (?P<params>;(?:[^;=]+(?:=(?:[^;\s]+))?))*
+        ''', re.VERBOSE)
+        
+        print(_syntax.match(message).groupdict())
+        
+        
 
 @dataclass
 class MaxForwards:
@@ -69,31 +79,37 @@ class MaxForwards:
 
 @dataclass
 class From:
-    from_uri: Uri
+    username: AnyStr
+    address: AnyStr
+    port: int = None
     display_info: AnyStr = None
     caller_id: AnyStr = None
-    attr: Attr = None
+    params: Dict[str, str] = None
 
     def __str__(self) -> str:
         display_info = f'"{self.display_info}" ' if self.display_info else ""
-        attr = self.attr if self.attr else ''
-        return f'From: {display_info}<{self.from_uri}{attr}>'
+        _uri = parser_uri_to_str(address=self.address, user=self.username, port=self.port, params=self.params)
+        return f'From: {display_info}<{_uri}>'
 
 
 @dataclass
 class To:
-    to_uri: Uri
-    attr: Attr = None
+    username: AnyStr
+    address: AnyStr
+    port: int = None
+    params: Dict[str, str] = None
     def __str__(self) -> str:
-        attr = self.attr if self.attr else ''
-        return f'To: <{self.to_uri}{attr}>'
+        _uri = parser_uri_to_str(address=self.address, user=self.username, port=self.port, params=self.params)
+        return f'To: <{_uri}>'
 
 
 @dataclass
 class Contact:
-    contact_uri: Uri
+    username: AnyStr
+    address: AnyStr
     def __str__(self) -> str:
-        return f'Contact: <{self.contact_uri}>'
+        _uri = parser_uri_to_str(address=self.address, user=self.username)
+        return f'Contact: <{_uri}>'
 
 
 @dataclass
@@ -119,6 +135,13 @@ class UserAgent:
 
 
 @dataclass
+class Server:
+    server: AnyStr
+    def __str__(self) -> str:
+        return f'Server: {self.server}'
+
+
+@dataclass
 class Expires:
     expires: int = field(default=30)
     def __str__(self) -> str:
@@ -140,27 +163,6 @@ class Allow:
         return f'Allow: {allow}'
 
 
-#TODO: Refactor and add to export
-@dataclass
-class Supported:
-    supported: List[AnyStr]
-    def __str__(self) -> str:
-        supported = ', '.join([_ for _ in self.supported])
-        return f'Supported: {supported}'
-
-
-#TODO: Refactor and add to export
-@dataclass
-class Unsupported:
-    """
-    https://datatracker.ietf.org/doc/html/rfc3261#page-177
-    """
-    unsupported: List[AnyStr]
-    def __str__(self) -> str:
-        unsupported = ', '.join([_ for _ in self.unsupported])
-        return f'Unsupported: {unsupported}'
-
-
 @dataclass
 class ContentType:
     content_type: AnyStr = field(default='application/sdp')
@@ -174,80 +176,82 @@ class ContentLength:
     def __str__(self) -> str:
         return f'Content-Length: {self.content_length}'
 
-#TODO: Refactor and add to export
-@dataclass
-class Route:
-    """
-    https://datatracker.ietf.org/doc/html/rfc3261#page-177
-    """
-    uri: Uri
-    def __str__(self) -> str:
-        return f'Route: <{self.uri};lr>'
-
-#TODO: Refactor and add to export
-@dataclass
-class RecordRoute:
-    """
-    https://datatracker.ietf.org/doc/html/rfc3261#page-175
-    """
-    uri: Uri
-    def __str__(self) -> str:
-        return f'Record-Route: <{self.uri}>;lr'
-
-#TODO: Refactor and add to export
-class Authentication:
-    # TODO: refatore this
-    def __init__(self, uri: Uri, realm: str, domain: str, nonce: str, response: str, authorization: str = 'Digest', algorithm: str = 'MD5'):
-        self.uri = uri
-        self.realm = realm
-        self.nonce = nonce
-        self.response = response
-        self.authorization = authorization
-
-    def __str__(self) -> str:
-        return f'Authorization: {self.authorization}'
 
 
 class Header:
-    def __init__(self):
-        self._via_uri: List[Via] = []
-        self._from_uri: From = None
-        self._to_uri: To = None
-        self._contact_uri: List[Contact] = []
-        self._call_id: CallId = None
-        self._cseq: CSeq = None
-        self._max_forwards: MaxForwards = None
-        self._user_agent: UserAgent = None
-        self._expires: Expires = None
-        self._allow: Allow = None
-        self._supported: Supported = None
-        self._unsupported: Unsupported = None
-        self._content_type: ContentType = None
-        self._content_length: ContentLength = None
-        self._route: List[Route] = []
-        self._record_route: List[RecordRoute] = []
+    def __init__(self, **kwargs):
+        """
+        Constructor for Header.
+
+        :param via_uri: Union[Via, List[Via]] of Via header.
+        :param from_uri: From header.
+        :param to_uri: To header.
+        :param contact_uri: Union[Contact, List[Contact]] of Contact header.
+        :param call_id: CallId header.
+        :param cseq: CSeq header.
+        :param max_forwards: MaxForwards header.
+        :param user_agent: UserAgent header.
+        :param server: Server header.
+        :param expires: Expires header.
+        :param allow: Allow header.
+        :param supported: Supported header (Not implemented yet).
+        :param unsupported: Unsupported header (Not implemented yet).
+        :param content_type: ContentType header.
+        :param content_length: ContentLength header.
+        :param route: List of Route header (Not implemented yet).
+        :param record_route: List of RecordRoute header (Not implemented yet).
+        :param proxy_authenticate: ProxyAuthenticate header (Not implemented yet).
+        :param authorization: Authorization header (Not implemented yet).
+        """
+        self._via_uri: Union[Via, List[Via]] = kwargs.get('via_uri', [])
+        self._from_uri: From = kwargs.get('from_uri', None)
+        self._to_uri: To = kwargs.get('to_uri', None)
+        self._contact_uri: Union[Contact, List[Contact]] = kwargs.get('contact_uri', [])
+        self._call_id: CallId = kwargs.get('call_id', None)
+        self._cseq: CSeq = kwargs.get('cseq', None)
+        self._max_forwards: MaxForwards = kwargs.get('max_forwards', None)
+        self._user_agent: UserAgent = kwargs.get('user_agent', None)
+        self._server: Server = kwargs.get('server', None)
+        self._expires: Expires = kwargs.get('expires', None)
+        self._allow: Allow = kwargs.get('allow', None)
+        self._content_type: ContentType = kwargs.get('content_type', None)
+        self._content_length: ContentLength = kwargs.get('content_length', None)
 
     def __str__(self) -> str:
-        headers = [
-            *[_ for _ in self._via_uri],
-            self._from_uri,
-            self._to_uri,
-            *[_ for _ in self._contact_uri],
-            self._call_id,
-            self._cseq,
-            self._max_forwards,
-            self._allow,
-            self._content_type,
-            self._content_length,
-            self._user_agent,
-            self._expires,
-            self._supported,
-            self._unsupported,
-            *[_ for _ in self._record_route if self._record_route],
-            *[_ for _ in self._route if self._route],
-        ]
+        h = []
+        
+        if isinstance(self._via_uri, list):
+            h.extend([_ for _ in self._via_uri])
+        else:
+            h.append(self._via_uri)
+
+        h.extend(
+            [
+                self._from_uri,
+                self._to_uri,
+            ]
+        )
+        if isinstance(self._contact_uri, list):
+            h.extend([_ for _ in self._contact_uri])
+        else:
+            h.append(self._contact_uri)
+
+        h.extend(
+            [
+                self._call_id,
+                self._cseq,
+                self._max_forwards,
+                self._allow,
+                self._content_type,
+                self._content_length,
+                self._user_agent,
+                self._server,
+                self._expires,
+            ]
+        )
+            
         # TODO: Refactore to not allow multiple headers with the same name
-        return f'{EOL}'.join([str(_) for _ in headers if _])
+        return f'{EOL}'.join([str(_) for _ in h if _])
 
     def __rich__(self) -> Panel:
         return Panel(self.__str__(), title="Headers", highlight=True, expand=False)
@@ -261,6 +265,10 @@ class Header:
 
     @via_uri.setter
     def via_uri(self, via_uri: Via):
+        if self._via_uri is None:
+            self._via_uri = []
+        if not isinstance(self._via_uri, list):
+            self._via_uri = [self._via_uri]
         self._via_uri.append(via_uri)
 
     @property
@@ -285,7 +293,12 @@ class Header:
 
     @contact_uri.setter
     def contact_uri(self, contact_uri: Contact):
+        if self._contact_uri is None:
+            self._contact_uri = []
+        if not isinstance(self._contact_uri, list):
+            self._contact_uri = [self._contact_uri]
         self._contact_uri.append(contact_uri)
+
     
     @property
     def call_id(self) -> CallId:
@@ -320,6 +333,14 @@ class Header:
         self._user_agent = user_agent
 
     @property
+    def server(self) -> Server:
+        return self._server
+
+    @server.setter
+    def server(self, server: Server):
+        self._server = server
+
+    @property
     def expires(self) -> Expires:
         return self._expires
 
@@ -334,22 +355,6 @@ class Header:
     @allow.setter    
     def allow(self, allow: Allow):
         self._allow = allow
-
-    @property
-    def supported(self) -> Supported:
-        return self._supported
-
-    @supported.setter    
-    def supported(self, supported: Supported):
-        self._supported = supported
-
-    @property
-    def unsupported(self) -> Unsupported:
-        return self._unsupported
-
-    @unsupported.setter    
-    def unsupported(self, unsupported: Unsupported):
-        self._unsupported = unsupported
 
     @property
     def content_type(self) -> ContentType:
@@ -367,22 +372,6 @@ class Header:
     def content_length(self, content_length: ContentLength):
         self._content_length = content_length
 
-    @property
-    def route(self) -> List[Route]:
-        return self._route
-
-    @route.setter    
-    def route(self, route: Route):
-        self._route.append(route)
-
-    @property
-    def record_route(self) -> List[RecordRoute]:
-        return self._record_route
-
-    @record_route.setter    
-    def record_route(self, record_route: RecordRoute):
-        self._record_route.append(record_route)
-
 
 
 def test() -> Header:
@@ -392,7 +381,6 @@ def test() -> Header:
     public_port = 10060
     domain = 'pabx.com'
     port = 5060
-    protocol = ProtocolType.UDP
     username = 'root-1001'
     display_info = 'root'
     password = 'password'  # noqa: F841
@@ -403,11 +391,6 @@ def test() -> Header:
     tag = '12345678'
     expires = 3600
     branch = 'z9hG4bK-dcba-12345678'
-    via_uri = Uri(address=local_address, port=local_port)
-    via_uri = Uri(address=public_address, port=public_port)
-    from_uri = Uri(username=username, address=domain, port=port)
-    to_uri = Uri(username=username, address=domain)
-    contact_uri = Uri(username=username, address=local_address)
     method = SipMethod.REGISTER
     allowed_methods = [SipMethod.INVITE, SipMethod.ACK, SipMethod.BYE, SipMethod.CANCEL, SipMethod.REGISTER, SipMethod.OPTIONS]
     content_type = 'application/sdp'
@@ -415,10 +398,11 @@ def test() -> Header:
 
 
     h = Header()
-    h.via_uri = Via(via_uri=via_uri, protocol=protocol, attr=Attr({'branch': branch}))
-    h.from_uri = From(from_uri=from_uri, display_info=display_info, attr=Attr({'tag': tag}))
-    h.to_uri = To(to_uri=to_uri, attr=Attr({}))
-    h.contact_uri = Contact(contact_uri=contact_uri)
+    h.via_uri = Via(address=local_address, port=local_port, params={'branch': branch})
+    h.via_uri = Via(address=public_address, port=public_port, params={'branch': branch})
+    h.from_uri = From(username=username, address=domain, port=port, display_info=display_info, params={'tag': tag})
+    h.to_uri = To(username=username, address=domain)
+    h.contact_uri = Contact(username=username, address=local_address)
     h.call_id = CallId(call_id=call_id)
     h.cseq = CSeq(cseq=cseq, method=method)
     h.max_forwards = MaxForwards(max_forwards=max_forwards)

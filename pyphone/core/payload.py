@@ -1,16 +1,13 @@
 from typing import List
 from pyphone.core.utils import (
+    EOL,
+    cl,
     MediaType,
-    MediaProtocol,
+    MediaProtocolType,
     MediaSessionType,
     CodecType,
     DtmfPayloadType,
-)
-
-from pyphone.core.header import Uri
-from pyphone.core.utils import (
-    EOL,
-    cl
+    parser_uri_to_str
 )
 
 from rich.panel import Panel
@@ -23,7 +20,7 @@ __all__ = [
     'SessionBandwidth',
     'SessionEncryption',
     'MediaType',
-    'MediaProtocol',
+    'MediaProtocolType',
     'MediaSessionType',
     'CodecType',
     'DtmfPayloadType',
@@ -35,7 +32,7 @@ class SessionDescription:
             address: str,
             address_type: str = 'IP4',
             network_type: str = 'IN',
-            uri: Uri = None,
+            uri: str = None,
             session_version: int = None,
             session_id: int = None,
             session_name: str = None,
@@ -127,7 +124,7 @@ class MediaDescription:
     def __init__(self, 
         port: int,
         media_type: MediaType = MediaType.AUDIO,
-        protocol: MediaProtocol = MediaProtocol.RTP,
+        protocol: MediaProtocolType = MediaProtocolType.RTP,
         codec_type: List[CodecType] = [CodecType.PCMU, CodecType.PCMA],
         dtmf_payload_type: DtmfPayloadType = DtmfPayloadType.RFC_2833,
         packet_time: int = 20,
@@ -256,7 +253,7 @@ def example():
         username='root',
         session_id=42852867,
         session_version=42852867,
-        uri=Uri(username='root', address='10.130.130.114'),
+        uri=parser_uri_to_str(username='root', address='10.130.130.114'),
         address='10.130.130.114',
     )
     b.time_description = TimeDescription(
@@ -266,7 +263,7 @@ def example():
     b.media_description = MediaDescription(
         media_type=MediaType.AUDIO,
         port=61896,
-        protocol=MediaProtocol.RTP,
+        protocol=MediaProtocolType.RTP,
         codec_type=[CodecType.PCMU, CodecType.PCMA],
         dtmf_payload_type=DtmfPayloadType.RFC_2833,
         packet_time=20,

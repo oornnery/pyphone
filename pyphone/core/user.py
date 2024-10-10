@@ -1,10 +1,5 @@
 from pydantic_settings import BaseSettings
-
-try:
-    from dialog.header import Uri
-except ImportError:
-    from pyphone.core.header import Uri
-
+from pyphone.core.utils import parser_uri_to_str
 
 class User(BaseSettings):
     username: str = '1001'
@@ -14,8 +9,7 @@ class User(BaseSettings):
     display_info: str = 'Ext 1001'
     caller_id: str = '1001'
     user_agent: str = 'pyphone'
-    register_expires: int = 60
+    expires: int = 60
 
-    @property
-    def uri(self) -> Uri:
-        return Uri(user=self.username, address=self.domain)
+    def uri(self) -> str:
+        return parser_uri_to_str(username=self.username, address=self.domain, port=self.port)

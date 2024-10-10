@@ -1,5 +1,6 @@
 import logging
 from enum import Enum
+from typing import Dict, List, AnyStr
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -14,32 +15,6 @@ logging.basicConfig(
 )
 
 log = logging.getLogger("rich")
-
-
-
-class ProtocolType(Enum):
-    UDP = "UDP"
-    TCP = "TCP"
-    TLS = "TLS"
-    WS = "WS"
-
-    def __str__(self) -> str:
-        return self._value_
-
-
-class SipMethod(Enum):
-    INVITE = "INVITE"
-    ACK = "ACK"
-    BYE = "BYE"
-    CANCEL = "CANCEL"
-    REGISTER = "REGISTER"
-    OPTIONS = "OPTIONS"
-    SUBSCRIBE = "SUBSCRIBE"
-    NOTIFY = "NOTIFY"
-    UPDATE = "UPDATE"
-
-    def __str__(self) -> str:
-        return self._value_
 
 
 class SipStatusCode(Enum):
@@ -179,14 +154,54 @@ class MediaSessionType(Enum):
     RECVONLY = 'recvonly'
 
 
-class MediaProtocol(Enum):
+class MediaProtocolType(Enum):
     RTP = 'RTP'
     RTCP = 'RTCP'
 
+class ProtocolType(Enum):
+    UDP = "UDP"
+    TCP = "TCP"
+    TLS = "TLS"
+    WS = "WS"
 
-EOL = "\n\r"
-SIP_VERSION = "SIP/2.0"
-SIP_METHODS = [SipMethod.INVITE, SipMethod.ACK, SipMethod.BYE, SipMethod.CANCEL, SipMethod.REGISTER, SipMethod.OPTIONS, SipMethod.SUBSCRIBE, SipMethod.NOTIFY, SipMethod.UPDATE]
+    def __str__(self) -> str:
+        return self._value_
+
+
+class SipMethod(Enum):
+    INVITE = "INVITE"
+    ACK = "ACK"
+    BYE = "BYE"
+    CANCEL = "CANCEL"
+    REGISTER = "REGISTER"
+    OPTIONS = "OPTIONS"
+    SUBSCRIBE = "SUBSCRIBE"
+    NOTIFY = "NOTIFY"
+    UPDATE = "UPDATE"
+
+    def __str__(self) -> str:
+        return self._value_
+
+EOL = '\n\r'
+SIP_SCHEME = 'SIP'
+SIP_VERSION = '2.0'
+SIP_BRANCH = 'z9hG4bK'
+SIP_METHODS = [
+    SipMethod.INVITE,
+    SipMethod.ACK,
+    SipMethod.BYE,
+    SipMethod.CANCEL,
+    SipMethod.REGISTER,
+    SipMethod.OPTIONS,
+    SipMethod.SUBSCRIBE,
+    SipMethod.NOTIFY,
+    SipMethod.UPDATE
+    ]
+SIP_MAX_FORWARDS = 70
+SIP_CONTENT = "application"
+SIP_CONTENT_TYPE = "sdp"
+SIP_SUPPORTED = []
+SIP_UNSUPPORTED = []
 COMPACT_HEADERS = {
     "i": "call-id",
     "m": "contact",
@@ -199,3 +214,15 @@ COMPACT_HEADERS = {
     "t": "to",
     "v": "via",
 }
+
+def parser_params_to_str(params: Dict[str, str]) -> str:
+    if not params:
+        return ''
+    return ''.join([f';{k}={v}' for k, v in params.items()])
+
+
+def parser_uri_to_str(address: str, user: str = None, port: int = None, params: Dict[str, str] = None, scheme: str = SIP_SCHEME) -> str:
+    _user = (f'{scheme.lower()}:{user}@' if user else '')
+    _port = (f':{port}' if port else '')
+    _params = (parser_params_to_str(params) if params else '')
+    return f'{_user}{address}{_port}{_params}'
