@@ -17,6 +17,7 @@ pytest = "^8.3.3"
 numpy = "^2.1.2"
 pyaudio = "^0.2.14"
 scipy = "^1.14.1"
+pyvoip = {path = "pyVoIP"}
 
 
 [tool.poetry.group.dev.dependencies]

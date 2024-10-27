@@ -1,259 +1,176 @@
-import binascii
-from enum import Enum
-import random
+from dataclasses import dataclass, field
+from typing import Annotated, TypedDict, Dict, List, Optional, Tuple, Callable
+from enum import property, Enum
 import re
+from datetime import datetime
+import uuid
+import hashlib
 import socket
-import struct
-import threading
+import asyncio
 import time
-from typing import List
+from abc import ABC
 
 
-EOL = '\n\r'
-SIP_SCHEME = 'SIP'
-SIP_VERSION = '2.0'
-SIP_BRANCH = 'z9hG4bK'
-SIP_MAX_FORWARDS = 70
-SIP_CONTENT = "application"
-SIP_CONTENT_TYPE = "sdp"
-COMPACT_HEADERS = {
-    "i": "call-id",
-    "m": "contact",
-    "e": "contact-encoding",
-    "l": "content-length",
-    "c": "content-type",
-    "f": "from",
-    "s": "subject",
-    "k": "supported",
-    "t": "to",
-    "v": "via",
-}
-
-class SipMethod(Enum):
-    INVITE = "INVITE"
-    ACK = "ACK"
-    BYE = "BYE"
-    CANCEL = "CANCEL"
-    REGISTER = "REGISTER"
-    OPTIONS = "OPTIONS"
-    SUBSCRIBE = "SUBSCRIBE"
-    NOTIFY = "NOTIFY"
-    UPDATE = "UPDATE"
-
-    def __str__(self) -> str:
-        return self._value_
-
-    @staticmethod
-    def methods() -> List[str]:
-        return [str(m) for m in SipMethod]
-
-
-class SipStatusCode(Enum):
-    def __new__(cls, code, reason_phrase):
-        obj = object.__new__(cls)
-        obj._value_ = code
-        obj.code = code
-        obj.reason_phrase = reason_phrase
-        return obj
-
-    # SIP Status Codes 1xx
-    TRYING = (100, "Trying")
-    RINGING = (180, "Ringing")
-    CALL_IS_BEING_FORWARDED = (181, "Call is being forwarded")
-    QUEUED = (182, "Queued")
-    SESSION_PROGRESS = (183, "Session Progress")
-    EARLY_DIALOG_TERMINATED = (199, "Early Dialog Terminated")
-    # SIP Status Codes 2xx
-    OK = (200, "OK")
-    ACCEPTED = (202, "Accepted")
-    NO_NOTIFICATION = (204, "No Notification")
-    # SIP Status Codes 3xx
-    MULTIPLE_CHOICES = (300, "Multiple Choices")
-    MOVED_PERMANENTLY = (301, "Moved Permanently")
-    MOVED_TEMPORARILY = (302, "Moved Temporarily")
-    USE_PROXY = (305, "Use Proxy")
-    ALTERNATIVE_SERVICE = (380, "Alternative Service")
-    # SIP Status Codes 4xx
-    BAD_REQUEST = (400, "Bad Request")
-    UNAUTHORIZED = (401, "Unauthorized")
-    FORBIDDEN = (403, "Forbidden")
-    NOT_FOUND = (404, "Not Found")
-    METHOD_NOT_ALLOWED = (405, "Method Not Allowed")
-    NOT_ACCEPTABLE = (406, "Not Acceptable")
-    PROXY_AUTHENTICATION_REQUIRED = (407, "Proxy Authentication Required")
-    REQUEST_TIMEOUT = (408, "Request Timeout")
-    CONFLICT = (409, "Conflict")
-    GONE = (410, "Gone")
-    LENGTH_REQUIRED = (411, "Length Required")
-    CONDITIONAL_REQUEST_FAILED = (412, "Conditional Request Failed")
-    REQUEST_ENTITY_TOO_LARGE = (413, "Request Entity Too Large")
-    REQUEST_URI_TOO_LONG = (414, "Request-URI Too Long")
-    UNSUPPORTED_MEDIA_TYPE = (415, "Unsupported Media Type")
-    UNSUPPORTED_URI_SCHEME = (416, "Unsupported URI Scheme")
-    UNKNOWN_RESOURCE_PRIORITY = (417, "Unknown Resource-Priority")
-    BAD_EXTENSION = (420, "Bad Extension")
-    EXTENSION_REQUIRED = (421, "Extension Required")
-    SESSION_INTERVAL_TOO_SMALL = (422, "Session Interval Too Small")
-    INTERVAL_TOO_BRIEF = (423, "Interval Too Brief")
-    BAD_LOCATION_INFORMATION = (424, "Bad Location Information")
-    USE_IDENTITY_HEADER = (428, "Use Identity Header")
-    PROVIDE_REFERRER_IDENTITY = (429, "Provide Referrer Identity")
-    FLOW_FAILED = (430, "Flow Failed")
-    ANONYMITY_DISALLOWED = (433, "Anonymity Disallowed")
-    BAD_IDENTITY_INFO = (436, "Bad Identity-Info")
-    UNSUPPORTED_CERTIFICATE = (437, "Unsupported Certificate")
-    INVALID_IDENTITY_HEADER = (438, "Invalid Identity Header")
-    FIRST_HOP_LACKS_OUTBOUND_SUPPORT = (439, "First Hop Lacks Outbound Support")
-    MAX_BREADTH_EXCEEDED = (440, "Max-Breadth Exceeded")
-    BAD_INFO_PACKAGE = (469, "Bad Info Package")
-    CONSENT_NEEDED = (470, "Consent Needed")
-    TEMPORARILY_UNAVAILABLE = (480, "Temporarily Unavailable")
-    CALL_TRANSACTION_DOES_NOT_EXIST = (481, "Call/Transaction Does Not Exist")
-    LOOP_DETECTED = (482, "Loop Detected")
-    TOO_MANY_HOPS = (483, "Too Many Hops")
-    ADDRESS_INCOMPLETE = (484, "Address Incomplete")
-    AMBIGUOUS = (485, "Ambiguous")
-    BUSY_HERE = (486, "Busy Here")
-    REQUEST_TERMINATED = (487, "Request Terminated")
-    NOT_ACCEPTABLE_HERE = (488, "Not Acceptable Here")
-    BAD_EVENT = (491, "Bad Event")
-    REQUEST_PENDING = (493, "Request Pending")
-    UNDECIPHERABLE = (494, "Undecipherable")
-    SECURITY_AGREEMENT_REQUIRED = (494, "Security Agreement Required")
-    # SIP Status Codes 5xx
-    SERVER_INTERNAL_ERROR = (500, "Server Internal Error")
-    NOT_IMPLEMENTED = (501, "Not Implemented")
-    BAD_GATEWAY = (502, "Bad Gateway")
-    SERVICE_UNAVAILABLE = (503, "Service Unavailable")
-    SERVER_TIMEOUT = (504, "Server Time-out")
-    VERSION_NOT_SUPPORTED = (505, "Version Not Supported")
-    MESSAGE_TOO_LARGE = (513, "Message Too Large")
-    PUSH_NOTIFICATION_SERVICE_NOT_SUPPORTED = (555, "Push Notification Service Not Supported")
-    PRECONDITION_FAILURE = (580, "Precondition Failure")
-    # SIP Status Codes 6xx
-    BUSY_EVERYWHERE = (600, "Busy Everywhere")
-    DECLINE = (603, "Decline")
-    DOES_NOT_EXIST_ANYWHERE = (604, "Does Not Exist Anywhere")
-    UNWANTED = (607, "Unwanted")
-
-
-class TransportProtocolType(Enum):
-    def __str__(self):
-        return self._value_
-
-    def __repr__(self):
-        return self.__str__()
-
-    TLS = "TLS"
-    TCP = "TCP"
-    UDP = "UDP"
-
-
-class MediaProtocolType(Enum):
-    def __str__(self):
-        return self._value_
-
-    def __repr__(self):
-        return self.__str__()
-
-    RTP = "RTP"
-    RTCP = "RTCP"
-
-
-class MediaType(Enum):
-    def __str__(self):
-        return self._value_
-
-    def __repr__(self):
-        return self.__str__()
-    AUDIO = "audio"
-    VIDEO = "video"
-    MESSAGE = "message"
-
-
-class MediaSessionType(Enum):
-    def __str__(self):
-        return self._value_
-
-    def __repr__(self):
-        return self.__str__()
-
-    SENDRECV = 'sendrecv'
-    SENDONLY = 'sendonly'
-    RECVONLY = 'recvonly'
-
-
-class CodecType(Enum):
-    def __str__(self):
-        return self._value_[1]
-
-    def __new__(self, code: int, description: str, sample_rate: int):
-        obj = object.__new__(self)
-        obj._value_ = description
-        obj.code = code
-        obj.description = description
-        obj.sample_rate = sample_rate
-        return obj
-
-    def __repr__(self):
-        return f'{self.code} {self.description}/{self.sample_rate}'
-
-    PCMU = (0, 'PCMU', 8000)
-    PCMA = (8, 'PCMA', 8000)
-
-
-class DtmfType(Enum):
-    def __new__(self, code: int, description: str, sample_rate: int, duration: int):
-        obj = object.__new__(self)
-        obj._value_ = f'{code} {description}/{sample_rate}'
-        obj.code = code
-        obj.description = description
-        obj.sample_rate = sample_rate
-        obj.duration = f'0-{duration}'
-        return obj
-
-    def __repr__(self):
-        return f'{self.code} {self.description}/{self.sample_rate}'
-
-    def rtpmap(self):
-        return f'rtpmap:{self.code} {self.description}/{self.sample_rate}'
-
-    def fmtp(self):
-        return f'fmtp:{self.code} {self.duration}'
-
-    RFC_2833 = (101, 'telephone-event', 8000, 16)
-
-
-class DirectionType(Enum):
-    INCOMING = "INCOMING"
-    OUTGOING = "OUTGOING"
-    BOTH = "BOTH"
+from rich.panel import Panel
+from rich.text import Text
+from rich.pretty import Pretty
 
 
 
-"""
-Create class SipResponse/SipRequest for Sip Status Codes and Sip Methods
 
-for 302 
 
-class MovedTemporarily302(SipMessage):
-    def __init__(self):
-        super().__init__()
-        self.method_line = "SIP/2.0 302 Moved Temporarily\r\n"
 
-    def append_contact(self, contact, weight):
-        def create_sip_uri(contact, weight):
-            return "<sip:{}>;q={}".format(contact, weight)
-        if self._data["contact"]:
-            self._data["contact"] = self._data["contact"] + "," + create_sip_uri(contact, weight)
+
+
+
+
+
+
+#### Transaction and Connection
+
+class SIPConnection:
+    def __init__(self, host: str, port: int, transport: str = 'udp', callback: Callable[[SIPMessage], None] = None):
+        self.host = host
+        self.port = port
+        self.transport = transport
+        self.callback = callback
+        self.reader: asyncio.StreamReader = None
+        self.writer: asyncio.StreamWriter = None
+        self.obj_recv = asyncio.get_event_loop().create_task(self.recv)
+
+    async def connect(self):
+        if self.transport == 'udp':
+            self.reader, self.writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port), timeout=5)
+        elif self.transport == 'tcp':
+            self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+        elif self.transport == 'tls':
+            self.reader, self.writer = await asyncio.open_connection(self.host, self.port, ssl=True)
         else:
-            self._data["contact"] = self._data["contact"] + create_sip_uri(contact, weight)
+            raise ValueError(f'Invalid transport {self.transport}')
 
-    def clean_contact(self):
-        self._data["contact"] = ""
-"""
+    async def send(self, message: SIPMessage):
+        self.writer.write(message.to_bytes())
+        await self.writer.drain()
+
+    async def recv(self):
+        while True:
+            data = await self.reader.read(1024)
+            if data:
+                message = SIPMessage.from_bytes(data)
+                if self.callback:
+                    self.callback(message)
+            else:
+                break
 
 
+@dataclass
+class Transport:
+    local_ip: str = field(default='0.0.0.0')
+    local_port: str = field(default='10060')
+    public_ip: str = field(default='0.0.0.0')
+    public_port: str = field(default='0')
+    protocol: SIPTransportType = field(default=SIPTransportType.UDP)
 
-if __name__ == "__main__":
-    print(socket.SOCK_STREAM)
+
+@dataclass
+class UserAgent:
+    domain: str
+    port: str
+    username: str
+    password: str = None
+
+
+class StackDict(TypedDict):
+    call_id: str
+    message: SIPMessage
+
+
+class SIPSession:
+    def __init__(self, transport: Transport, user_agent: UserAgent):
+        self.transport = transport
+        self.user_agent = user_agent
+        self.request: StackDict = {}
+        self.response: StackDict = {}
+        self.auth: Optional[SIPAuthentication] = None
+        self.sock = SIPConnection(
+            host=self.user_agent.domain,
+            port=self.user_agent.port,
+            transport=self.transport.protocol,
+            callback=self.handle_message
+        )
+        self.rtp = None
+
+    def handle_message(self, message):
+        pass
+    
+    def set_credentials(self, username: str, password: str):
+        """Set authentication credentials"""
+        self.auth = SIPAuthentication(username, password)
+
+    def create_sdp(self) -> SDPBody:
+        return SDPBody(
+            originator_information=f'- {str(uuid.uuid4())} 1 IN IP4 {self.transport.local_ip}',
+            session_name=f'{self.user_agent.username}',
+            connection_information=f'IN IP4 {self.transport.local_ip}',
+            session_time='0 0',
+            media_information=(f'audio {self.transport.public_port} RTP/AVP 0 8 101'),
+            media_attributes=[
+                ('rtpmap', '0 PCMU/8000'),
+                ('rtpmap', '8 PCMA/8000'),
+                ('ptime', '20'),
+                ('rtpmap', '101 telephone-event/8000'),
+                ('fmtp', '101 0-15'),
+                ('', 'sendrecv')
+                ]
+        )
+    
+    def create_header(self) -> SIPHeader:
+        return SIPHeader(
+            
+        )
+    
+    def
+
+
+class PyPhone:
+    pass
+    
+    
+    
+    
+
+if __name__ == '__main__':
+    from rich.console import Console
+    
+    cl = Console()
+    
+    sdp_str = 'v=0\r\no=root 42852867 42852867 IN IP4 10.130.130.114\r\ns=call\r\nu=call@10.130.130.114\r\ne=mjh@isi.edu\r\np=+1 617 253 6011\r\nz=2882844526 -1h 2898848070 0\r\nt=3034423619 3042462419\r\nt=0 0\r\nr=604800 3600 0 90000\r\nm=audio 61896 RTP 0 8 3 101\r\nm=video 61896 RTP 0 8 3 101\r\nc=IN IP4 10.130.130.114\r\nb=X-YZ:128\r\nk=base64:\r\na=rtpmap:0 pcmu/8000\r\na=rtpmap:8 pcma/8000\r\na=rtpmap:3 gsm/8000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\na=sendrecv\r\n'
+    sdp = SDPBody.parser(sdp_str)
+    
+    header_str = 'SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 10.14.11.146:10060;rport=1024;received=187.75.34.66;branch=z9hG4bK8cafcde14db593eecde1f\r\nv: SIP/2.0/UDP 10.14.11.146:10060;rport=1024;received=187.75.34.66;branch=z9hG4bK8cafcde14db593eecde1f\r\nRecord-Route: <sip:177.53.194.248;transport=tcp;r2=on;ftag=3882100124;lr;did=e4c.5c22>\r\nRecord-Route: <sip:177.53.194.248:5060;r2=on;ftag=3882100124;lr;did=e4c.5c22>\r\nFrom: "P2x9137" <sip:062099137@177.53.194.248:5060>;tag=3882100124\r\nTo: <sip:039959137@177.53.194.248:5060>;tag=as2a08438b\r\nCall-ID: 0_3882207522@10.14.11.146\r\nContact: <sip:039959137@177.53.194.248:5060>\r\nCSeq: 1 INVITE\r\nServer: IDT Brasil Hosted UA\r\nAllow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH\r\nSupported: replaces, timer\r\nContent-Type: application/sdp\r\nX-voipnow-recording: enabled;status: unconditional\r\nX-voipnow-video: deny\r\nContent-Length: 332\r\n\r\nv=0\r\no=root 221186565 221186565 IN IP4 177.53.194.248\r\ns=VoipNow\r\nc=IN IP4 177.53.194.248\r\nt=0 0\r\na=msid-semantic: WMS\r\nm=audio 18590 RTP/AVP 0 8 101\r\nc=IN IP4 177.53.194.248\r\na=rtcp:18591 IN IP4 177.53.194.248\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\na=sendrecv\r\n'
+    header = SIPHeader.parser(header_str)
+    
+    req = SIPRequest(method=SIPMethod.INVITE, uri='pabx.org:5060', header=header, sdp=sdp)
+
+    cl.print(req)
+    username = 'root'
+    local_ip = '0.0.0.0'
+    public_port = 66666
+    sdp3 = SDPBody(
+            originator_information=f'- {str(uuid.uuid4())} 1 IN IP4 {local_ip}',
+            session_name=f'{username}',
+            connection_information=f'IN IP4 {local_ip}',
+            session_time='0 0',
+            media_information=f'audio {public_port} RTP/AVP 0 8 101',
+            media_attributes=[
+                ('rtpmap', '0 PCMU/8000'),
+                ('rtpmap', '8 PCMA/8000'),
+                ('ptime', '20'),
+                ('rtpmap', '101 telephone-event/8000'),
+                ('fmtp', '101 0-15'),
+                ('', 'sendrecv')
+                ]
+        )
+    
+    print(sdp3)

@@ -10,9 +10,8 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import List, Union, Dict
+from typing import Dict, List
 
-from scipy import signal
 import pyaudio
 
 from pyphone.settings import Settings
@@ -20,13 +19,14 @@ from pyphone.logger import logger
 
 settings = Settings()
 
-EOL = '\n\r'
+EOL = r'\n\r'
 SIP_SCHEME = 'SIP'
 SIP_VERSION = '2.0'
 SIP_BRANCH = 'z9hG4bK'
 SIP_MAX_FORWARDS = 70
 SIP_CONTENT = "application"
 SIP_CONTENT_TYPE = "sdp"
+
 COMPACT_HEADERS = {
     "i": "call-id",
     "m": "contact",
@@ -534,7 +534,7 @@ class SIPClient:
         contact_uri = f"sip:{self.username}@{self.local_ip}:{self.local_port}"
         from_tag = self.generate_tag()
         # Primeira tentativa de REGISTER sem autenticação
-        request = self.send_request(
+        self.send_request(
             method="REGISTER",
             to_uri=to_uri,
             from_uri=from_uri,
@@ -568,7 +568,7 @@ class SIPClient:
                     return False
                 
                 # Segunda tentativa de REGISTER com autenticação
-                request = self.send_request(
+                self.send_request(
                     method="REGISTER",
                     to_uri=to_uri,
                     from_uri=from_uri,
@@ -602,7 +602,7 @@ class SIPClient:
         local_rtp_port = random.randint(10000, 20000)
         from_tag = self.generate_tag()
         sdp_body = self.generate_sdp(local_rtp_port)
-        request = self.send_request(
+        self.send_request(
             method="INVITE",
             to_uri=to_uri,
             from_uri=from_uri,
@@ -689,7 +689,7 @@ class SIPClient:
         to_uri = f"sip:{self.username}@{self.domain}"
         from_uri = to_uri
 
-        request = self.send_request(
+        self.send_request(
             method="BYE",
             to_uri=to_uri,
             from_uri=from_uri,
@@ -709,7 +709,7 @@ class SIPClient:
         from_uri = to_uri
         contact_uri = f"sip:{self.username}@{self.local_ip}:{self.local_port}"
 
-        request = self.send_request(
+        self.send_request(
             method="REGISTER",
             to_uri=to_uri,
             from_uri=from_uri,
@@ -947,7 +947,7 @@ class DTMFDetector:
         k = int(0.5 + n * target_freq / self.sample_rate)
         omega = 2 * math.pi * k / n
         cos_omega = math.cos(omega)
-        sin_omega = math.sin(omega)
+        # sin_omega = math.sin(omega)
         coeff = 2 * cos_omega
 
         q0, q1, q2 = 0, 0, 0
