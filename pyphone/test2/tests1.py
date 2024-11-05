@@ -1,14 +1,17 @@
 import signal
-from dataclasses import keyword, dataclass
+from dataclasses import dataclass
 
 import logging
 import uuid
 import socket
+from socket import gethostname, gethostbyname, gethostbyname_ex
+
+from typing import Optional, List, Union, Dict, AnyStr
 
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-
+from enum import Enum
 
 console = Console()
 
@@ -26,12 +29,15 @@ logging.getLogger("rich")
 
 
 
-class ProtocolType:
-    UDP: ('UDP', socket.SOCK_STREAM)
-    TCP: ('TCP', socket.SOCK_DGRAM)
+class ProtocolType(Enum):
+    UDP = ('UDP', socket.SOCK_STREAM)
+    TCP = ('TCP', socket.SOCK_DGRAM)
 
-    def __new__(self, desc, s_type)
-        ...
+    def __new__(self, desc, s_type):
+        obj = object.__new__(self)
+        obj.desc = desc
+        obj.socket_type = s_type
+        return obj
 
 @dataclass
 class SIPResponse:
@@ -57,9 +63,7 @@ class UserConfig:
     user_agent: str
 
 
-
-
-def get_sock(protocol: ProtocolType = ProtocolType.UDP)
+def get_sock(protocol: ProtocolType = ProtocolType.UDP):
     _s = socket.socket()
 
 class EndPoint:
@@ -78,8 +82,8 @@ class EndPoint:
             _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             _s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             _s.connect(('8.8.8.8', 80))
-            local_ip = temp_sock.getsockname()[0]
-            temp_socket.close()
+            local_ip = _s.getsockname()[0]
+            _s.close()
             return local_ip
         except Exception as e:
             raise '127.0.0.1'
@@ -95,7 +99,7 @@ class EndPoint:
             return [EndPoint.get_local_ip()]
     
     @staticmethod
-    def resolve_dns(hostname: str) -> tuple[str, list[str]]
+    def resolve_dns(hostname: str) -> tuple[str, list[str]]:
         '''Resolve hostname to IP address'''
         try:
             hostname_full, aliases, ips = gethostbyname_ex(hostname)
@@ -110,7 +114,7 @@ class EndPoint:
         return ip
 
     def create_server(self, protocol: str = 'udp'):
-        sock_type = socket.SOCK_DGRAM if protocol.upper() == 'UDP' else socket.SOCK_STREAM
+        socket_type = socket.SOCK_DGRAM if protocol.upper() == 'UDP' else socket.SOCK_STREAM
         self._sock = socket.socket(socket.AF_INET, socket_type)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind((self.host, self.port))
@@ -121,28 +125,40 @@ class EndPoint:
         return self
 
     def create_client(self):
-        
+        self._c_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        return self
+
+
 class Header:
-    _headers: dict = {
-        'Via': [],
-        'From': str,
-        'To': str,
-    }
-    
-    def add_header(self, key, value):
-        try:
-            # TODO: Include outher items with list some route
-            _key = self._headers.get(key, None)
-            if isinstance(_key, list):
-                _key.append(value)
-                return
-            self._headers.update({key: value})
-        except (ValueError) as e:
-            logging.error(f'Header Error: Failed to add header ({key} {value})')
+    _headers: Dict[str, Union[AnyStr, List[str], Dict[str, AnyStr]]] = {}
+
+    def _parser_in(name: str):
+        return name.replace('-', '_').lower().strip()
+        
+    def _parser_out(name: str):
+        if name.lower().strip() == 'cseq':
+            return'CSeq'
+        return ''.join([
+            x.capitalize() for x in name.replace('_', '-').split('-')
+            ]).strip()
+
+    def __getattribute__(self, name):
+        _name = self._parser_in(name)
+        return self._headers.get(name, None)
+
+    def __setitem__(self, key, value):
+        _name = self._parser_in(key)
+        _key = self.get(key, None)
+
+        if isinstance(_key, list):
+            _key.append(value)
+            return
+        self._headers.update({key: value})
 
     def __str__(self):
         h = []
         for k, v in self._headers.items():
+            k = self._parser_out(k)
             if isinstance(v, list):
                 for x in v:
                     h.append(f'{k}: {x}')
@@ -150,70 +166,88 @@ class Header:
             h.append(f'{k}: {v}')
         return '\r\n'.join(h)
 
-class Body:
+class Sdp:
     _sdp = {}
 
 
 class SipMessage:
-    header = None
-    sdp = None
-    def __init__(self, headers: Header, sdp: dict = None, ep: EndPoint = None, **kwargs):
-        self.headers = headers
-        self.sdp = sdp
-        # Header
-        self.ep = ep if ep else EndPoint()
-        self._branch = None
+    def __init__(self, headers: Header, sdp: Sdp = None, **kwargs):
+        self.headers: Header = headers
+        self.sdp: Sdp = sdp
+        self.kwargs = kwargs
 
-    # TODO: Criar propriedades para acessar valores 
     @staticmethod
-    def gen_branch():
+    def _gen_branch():
         _id = str(uuid.uuid4())[:8]
         return str(f'z9hG4bK{_id}')
-    
+
     @staticmethod
-    def gen_local_tag():
+    def _gen_local_tag():
         return str(uuid.uuid4())[:6]
     
     @staticmethod
-    def gen_call_id() -> str:
+    def _gen_call_id() -> str:
         return str(uuid.uuid4())[:23]
-    
-    @staticmethod
-    def gen_local_ip(cls):
-        return cls.ep.get_local_ip()
 
-    @classmethod
-    def _header_base(
-        cls,
-        branch: str,
-        local_tag: str,
-        call_id: str,
-        cseq: str,
-        method: str,
-        uc: UserConfig = None,
-        remote_username: str = None,
-        content_type = 'application/sdp',
-        max_forwards: int = 70,
-        content_length: int = 0,
-        ) -> Header:
-        _display_info = (f'"{uc.display_info}" ' if uc.display_info else '')
-        _remote_username = (f'{remote_username}@' if remote_username else '')
+    def add_via(self):
+        pass
+
+    def add_from(self):
+        pass
+    
+    def add_to(self):
+        pass
+    
+    def add_contact(self):
+        pass
+
+    def add_call_id(self):
+        pass
+    
+    def add_cseq(self):
+        pass
+    
+    def add_user_agent(self):
+        pass
+    
+    def add_content_type(self):
+        pass
+    
+    def add_max_forwards(self):
+        pass
+    
+    def add_content_length(self):
+        pass
+
+    def get_via(self):
+            pass
         
-        h = Header()
+    def get_from(self):
+            pass
         
-        h.add_header('Via', f'SIP/2.0/UDP {uc.local_ip}:{uc.local_port};branch={branch}')
-        h.add_header('Via', f'SIP/2.0/UDP {uc.local_ip}:{uc.local_port};branch={branch}')
-        h.add_header('From', f'{_display_info}<sip:{uc.username}@{uc.remote_ip}:{uc.remote_port}>;tag={local_tag}')
-        h.add_header('To', f'<sip:{_remote_username}{uc.remote_ip}:{uc.remote_port}>')
-        h.add_header('Call-ID', f'{call_id}@{uc.local_ip}')
-        if uc.user_agent:
-            h.add_header('User-Agent', uc.user_agent)
-        h.add_header('CSeq', f'{cseq} {method}')
-        h.add_header('Content-Type', content_type)
-        h.add_header('Max-Forwards', max_forwards)
-        h.add_header('Content-Length', content_length)
+    def get_to(self):
+            pass
+    
+    def get_contact(self):
+            pass
+    
+    def get_call_id(self):
+            pass
         
-        return h
+    def get_cseq(self):
+            pass
+        
+    def get_user_agent(self):
+            pass
+        
+    def get_content_type(self):
+            pass
+        
+    def get_max_forwards(self):
+            pass
+        
+    def get_content_length(self):
+            pass
 
     @classmethod
     def parser(cls, message: str) -> 'SipMessage':
@@ -239,7 +273,6 @@ class SipMessage:
             return SipResponse(status_line=status_line, header=header, sdp=sdp)
         request_line = lines[0]
         return SipRequest(request_line=request_line, header=header, sdp=sdp)
-
 
 
 class SipRequest(SipMessage):
@@ -286,6 +319,7 @@ class SipRequest(SipMessage):
         return SipRequest(request_line=request_line, header=h)
 
 
+
 class SipResponse(SipMessage):
     def __init__(self, status_line: str, header: list, sdp: list = None):
         self.status_line = status_line
@@ -294,6 +328,7 @@ class SipResponse(SipMessage):
 
     def __repr__(self):
         return (self.status_line)
+
 
 
 class SipOptions:
@@ -334,13 +369,16 @@ if __name__ == '__main__':
     # res = SipMessage.parser(message=raw_res)
     # console.print(res)
     
-    o = SipRequest.options(
-        local_ip='client.domain.com',
-        local_port=10060,
-        remote_ip='domain.com',
-        remote_port=5060,
-        username='1001',
-        user_agent='PyPhone',
-        cseq=1,
-    )
-    print(o)
+    # o = SipRequest.options(
+    #     local_ip='client.domain.com',
+    #     local_port=10060,
+    #     remote_ip='domain.com',
+    #     remote_port=5060,
+    #     username='1001',
+    #     user_agent='PyPhone',
+    #     cseq=1,
+    # )
+    # print(o)
+    
+    h = Header()
+    h.add({'Via': 'SIP/2.0/UDP'})

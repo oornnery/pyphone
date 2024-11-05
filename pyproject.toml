@@ -15,9 +15,9 @@ pydantic-settings = "^2.5.2"
 ipython = "^8.27.0"
 pytest = "^8.3.3"
 numpy = "^2.1.2"
-pyaudio = "^0.2.14"
+# pyaudio = "^0.2.14"
 scipy = "^1.14.1"
-pyvoip = {path = "pyVoIP"}
+# pyvoip = {path = "pyVoIP"}
 
 
 [tool.poetry.group.dev.dependencies]

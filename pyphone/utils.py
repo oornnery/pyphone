@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import List
+import uuid
 
 
 EOL = r'\r\n'
@@ -11,20 +12,20 @@ SIP_CONTENT = "application"
 SIP_CONTENT_TYPE = "sdp"
 
 COMPACT_HEADERS = {
-    "i": "call-id",
+    "v": "via",
+    "f": "from",
+    "t": "to",
     "m": "contact",
+    "i": "call-id",
     "e": "contact-encoding",
     "l": "content-length",
     "c": "content-type",
-    "f": "from",
     "s": "subject",
     "k": "supported",
-    "t": "to",
-    "v": "via",
 }
 
 
-class SIPMethod(Enum):
+class Method(Enum):
     REGISTER = "REGISTER"
     INVITE = "INVITE"
     ACK = "ACK"
@@ -46,12 +47,18 @@ class SIPMethod(Enum):
     def __repr__(self):
         return self.__str__()
 
+    def __getitem__(self, method: str):
+        for m in Method:
+            if m._value_ == method:
+                return m
+        return None
+
     @staticmethod
     def methods() -> List[str]:
-        return [str(m) for m in SIPMethod]
+        return [str(m) for m in Method]
 
 
-class SIPStatusCode(Enum):
+class StatusCode(Enum):
     # SIP Status Codes 1xx
     TRYING = (100, "Trying")
     RINGING = (180, "Ringing")
@@ -132,18 +139,28 @@ class SIPStatusCode(Enum):
     DOES_NOT_EXIST_ANYWHERE = (604, "Does Not Exist Anywhere")
     UNWANTED = (607, "Unwanted")
 
-    def __new__(cls, code, reason_phrase):
+    def __new__(cls, code, reason):
         obj = object.__new__(cls)
         obj._value_ = code
         obj.code = code
-        obj.reason_phrase = reason_phrase
+        obj.reason = reason
         return obj
 
     def __str__(self):
-        return f'{self.code} {self.reason_phrase}'
+        return f'{self.code} {self.reason}'
 
     def __repr__(self):
-        return self.__str__()
+        return self
+    
+    def __getitem__(self, code: int) -> 'StatusCode':
+        for status in StatusCode:
+            if status.code == code:
+                return status
+        return None
+
+    def __contains__(self, code: int) -> bool:
+        return code in [status.code for status in StatusCode]
+
 
 
 """
@@ -168,17 +185,13 @@ class MovedTemporarily302(SipMessage):
         self._data["contact"] = ""
 """
 
-
-class SIPTransportType(Enum):
-    UDP = "UDP"
+class ProtocolType(Enum):
     TCP = "TCP"
+    UDP = "UDP"
     TLS = "TLS"
     
     def __str__(self):
         return self._value_
-    
-    def __repr__(self):
-        return self.__str__()
 
 
 class TransactionState(Enum):
@@ -188,3 +201,13 @@ class TransactionState(Enum):
     PROCEEDING = "PROCEEDING"
     COMPLETED = "COMPLETED"
     TERMINATED = "TERMINATED"
+
+
+def generate_branch():
+    return f"z9hG4bK-{uuid.uuid4()[0:8]}"
+
+def generate_call_id():
+    return str(uuid.uuid4())
+
+def generate_tag():
+    return str(uuid.uuid4()[0:6])
