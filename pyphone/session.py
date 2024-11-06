@@ -1,19 +1,16 @@
-from typing import Any, Callable, List, Optional, Union
+from typing import List, Optional, Union
 import threading
 import time
 
 from pyphone.dialog import Dialog, DialogState
 from pyphone.message import Request, Response, SIPMessage, MessageFactory
 from pyphone.utils import StatusCode, Method
-from pyphone.header import Header, HeaderField, Via, From, To, CallId, CSeq
+from pyphone.header import Header, HeaderField, Address, Via, From, To, CallId, CSeq
+from pyphone.sdp import Sdp, SdpField
 from pyphone.utils import logger
 from pyphone.connection import Connection
 from pyphone.transport import Transport
 from pyphone.user_agent import UserAgent
-
-
-
-    
 
 
 class Session:
@@ -88,7 +85,7 @@ class Session:
             call_id: str = None,
             seq: int = None,
             sdp: Sdp = None,
-            extra_headers_fields: List[HeaderField] = None
+            extra_headers_fields: List[HeaderField] = None,
             **kwargs
         ) -> Request:
         addr = Address(
@@ -153,58 +150,12 @@ class Session:
     def create_response(
             self,
             status_code: StatusCode,
-            call_id: str,
-            cseq: CSeq,
-            to_addr: Address = None,
-            branch: str = None,
-            local_tag: str = None,
-            remote_tag: str = None,
-            seq: int = None,
+            request: Request,
             sdp: Sdp = None,
-            extra_headers_fields: List[HeaderField] = None
+            extra_headers_fields: List[HeaderField] = None,
             **kwargs
         ) -> Request:
-        addr = Address(
-            host=self.user_agent.host,
-            port=self.user_agent.port,
-            user=self.user_agent.username,
-            display_name=self.user_agent.display_name
-        )
         h = Header()
-        h.add(kwargs.get('via_field', Via(
-                host=self.user_agent.transport.local_address,
-                port=self.user_agent.transport.local_port,
-                branch=branch
-            )))
-        h.add(kwargs.get('from_field', From(
-                address=addr,
-                tag=local_tag
-            )))
-        h.add(kwargs.get('to_field', To(
-                address=to_addr or addr,
-                tag=remote_tag
-            )))
-        h.add(kwargs.get('call_id_field', CallId(call_id)))
-        h.add(kwargs.get('cseq_field', CSeq(method=method, seq=seq)))
-        #TODO: Add extra headers
-        match status_code:
-            case StatusCode.OK:
-                h.add(HeaderField(key='Allow', value=Method.string_values()))
-                # TODO: Criar enum para os valores de Allow-Events
-                # h.add(HeaderField(key='Allow-Events', value='talk, hold, conference, refer'))
-                h.add(HeaderField(key='Supported', value='100rel, replaces, timer'))
-            case _:
-                pass
-        # TODO: Implementar corretamente o SDP
-        if sdp:
-            h.add(HeaderField(key='Content-Type', value='application/sdp'))
-            h.add(HeaderField(key='Content-Length', value=len(sdp)))
-        else:
-            h.add(HeaderField(key='Content-Length', value=0))
-        
-        if extra_headers_fields:
-            for header in extra_headers_fields:
-                h.add(header)
         
         return Response(
             status_code=status_code,
@@ -289,7 +240,6 @@ class Session:
         # Send ACK request
         m = MessageFactory.create_request(
             method=Method.ACK,
-            host=
             )
 
         pass
