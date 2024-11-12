@@ -1,12 +1,13 @@
 from uuid import uuid4
 from typing import Dict, List, Union
+from abc import ABC
 from pyphone.exceptions import ParsingError
-from pyphone.log import logger
+from pyphone.logger import logger
 from pyphone.utils import EOL, Method
 
 # Headers fields
 
-class HeaderField:
+class AbstractHeader(ABC):
     MULTI_HEADERS_FIELDS = (
         'via', 'contact', 'route', 'record-route',
         'path', 'service-route', 'p-associated-uri'
@@ -41,7 +42,13 @@ class HeaderField:
         except Exception as e:
             logger.error(f'Error normalizing header key {self.key}')
             raise ParsingError(f'Error normalizing header key: {e}')
-
+    @staticmethod
+    def _normalize_header_name(header_name: str) -> str:
+        '''Converte para lowercase e substitui hífens '-' por underscores '_'.'''
+        if header_name in Header.COMPACT_HEADERS:
+            return Header.COMPACT_HEADERS[header_name]
+        return header_name.lower().replace('-', '_')
+    
     def __str__(self):
         return f'{self.key}: {self.value}{EOL}'
 
@@ -82,7 +89,7 @@ class Address:
         return f'{_display}<sip:{self.user}{self.host}:{self.port}{_params}>'
 
 
-class Via(HeaderField):
+class Via(AbstractHeader):
     def __init__(
         self,
         host: str,
@@ -108,7 +115,7 @@ class Via(HeaderField):
         return f'z9hG4bK{uuid4().hex[:10]}'
     
 
-class From(HeaderField):
+class From(AbstractHeader):
     def __init__(
         self,
         address: Address,
@@ -125,7 +132,7 @@ class From(HeaderField):
         return uuid4().hex[:10]
     
 
-class To(HeaderField):
+class To(AbstractHeader):
     def __init__(
         self,
         address: Address,
@@ -137,7 +144,7 @@ class To(HeaderField):
         super().__init__('To', value)
 
 
-class CallId(HeaderField):
+class CallId(AbstractHeader):
     def __init__(self, call_id: str = None):
         self.call_id = call_id
         if not self.call_id:
@@ -148,7 +155,7 @@ class CallId(HeaderField):
         return uuid4().hex[:10]
 
 
-class CSeq(HeaderField):
+class CSeq(AbstractHeader):
     def __init__(self, method: Method, cseq: int = 1):
         self.method = method
         self.cseq = cseq
@@ -156,7 +163,7 @@ class CSeq(HeaderField):
 
 
 class Header:
-    '''Armazenar e manipular headers SIP (HeaderField).'''
+    '''Armazenar e manipular headers SIP (AbstractHeader).'''
     MULTI_HEADERS = (
         'via',
         'contact',
@@ -187,7 +194,7 @@ class Header:
         to_field: To = None,
         call_id_field: CallId = None,
         cseq_field: CSeq = None,
-        extras_fields: List[HeaderField] = None,
+        extras_fields: List[AbstractHeader] = None,
     ):
         self._headers = {}
         if via_field:
@@ -211,7 +218,7 @@ class Header:
             return Header.COMPACT_HEADERS[header_name]
         return header_name.lower().replace('-', '_')
     
-    def __setitem__(self, key: str, value: HeaderField) -> Union[str, List[str], None]:
+    def __setitem__(self, key: str, value: AbstractHeader) -> Union[str, List[str], None]:
         '''
         Permite adicionar headers usando diferentes formatos:
             - sip['call_id'] = valor
@@ -252,7 +259,7 @@ class Header:
                 lines.append(value)
         return ''.join([f'{line}' for line in lines])
 
-    def add(self, header: HeaderField) -> None:
+    def add(self, header: AbstractHeader) -> None:
         if isinstance(header, (list, tuple)):
             key = header[0].key
             self[key] = header

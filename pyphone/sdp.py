@@ -1,6 +1,8 @@
 from enum import Enum
 from uuid import uuid4
 from typing import Union, Any, List
+from abc import ABC
+
 
 from pyphone.utils import EOL
 
@@ -64,7 +66,7 @@ class MediaProtocolType(Enum):
 
 # SDP Classes
 # TODO: Melhorar isso
-class SdpField:
+class AbstractSdp:
     def __init__(self, key: str, value: str):
         self.key = key
         self.value = value
@@ -73,7 +75,7 @@ class SdpField:
         return f'{self.key}={self.value}{EOL}'
 
 
-class Owner(SdpField):
+class Owner(AbstractSdp):
     def __init__(
         self,
         username: str = '-',
@@ -98,7 +100,7 @@ class Owner(SdpField):
         return uuid4().hex[:5]
 
 
-class Attribute(SdpField):
+class Attribute(AbstractSdp):
     def __init__(self, value: str, name: str = None):
         self.name = name
         self.value = value
@@ -106,7 +108,7 @@ class Attribute(SdpField):
         super().__init__('a', f'{self.name}{self.value}')
 
 
-class ConectionInformation(SdpField):
+class ConectionInformation(AbstractSdp):
     def __init__(
         self,
         network_type: str = 'IN',
@@ -122,7 +124,7 @@ class ConectionInformation(SdpField):
         )
 
 
-class MediaDescription(SdpField):
+class MediaDescription(AbstractSdp):
     def __init__(
         self,
         port: int,
@@ -170,7 +172,7 @@ class Sdp:
         media_session_type: MediaSessionType = MediaSessionType.SENDRECV,
         ptime: int = 20,
         session_name: str = 'SDP Session',
-        extras_fields: List[SdpField] = None
+        extras_fields: List[AbstractSdp] = None
         ):
         self._sdp = {}
         self.owner = owner
@@ -201,7 +203,7 @@ class Sdp:
         if self.attributes:
             self._sdp['a'] = self.attributes
     
-    def __setitem__(self, key: str, value: SdpField) -> Union[str, List[str], None]:
+    def __setitem__(self, key: str, value: AbstractSdp) -> Union[str, List[str], None]:
         if key in self.MULTI_SDP:
             if key not in self._sdp:
                 self._sdp[key] = []

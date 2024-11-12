@@ -2,13 +2,115 @@ from __future__ import annotations
 
 import threading
 import datetime
-from typing import List, ByteString
+from typing import List, ByteString, Dict, AnyStr, Union
 from uuid import uuid4
+from abc import ABC, abstractmethod
 
 from utils import Method, StatusCode, EOL
 
-from pyphone.header import Header, HeaderField, Via, From, To, CallId, CSeq
-from pyphone.sdp import Sdp
+from pyphone.header import Header, AbstractHeader, Via, From, To, CallId, CSeq
+from pyphone.sdp import Sdp, AbstractSdp
+
+
+
+class AbstractMessage(ABC):
+    _headers: Dict[
+        AnyStr,
+        Union[
+            AbstractHeader, 
+            List[AbstractHeader]
+            ]
+        ] = {}
+    _body: Dict[
+        AnyStr, Union[
+            AbstractSdp, 
+            List[AbstractSdp]
+            ]
+        ] = {}
+    
+    def __setitem__(self, field: Union[AbstractHeader, AbstractSdp]):
+        if isinstance(field, AbstractHeader):
+            x = AbstractHeader._normalize_header_name(field)
+            if x in AbstractHeader.MULTI_HEADERS_FIELDS:
+                if x not in self._headers:
+                    self._headers[x] = []
+                self._headers[x].append(field)
+            else:
+                self._headers[x] = field
+                
+            self._headers[field.key] = field
+        elif isinstance(field, AbstractSdp):
+            self._body[field.key] = field
+        elif isinstance(field, dict):
+            for key, value in field.items():
+                if isinstance(value, AbstractHeader):
+                    self._headers[key] = value
+                elif isinstance(value, AbstractSdp):
+                    self._body[key] = value
+                else:
+                    raise ValueError('Invalid value type')
+    
+    def __getitem__(self, key):
+        return getattr(self, key)
+    
+    def __delitem__(self, key):
+        delattr(self, key)
+    
+    def __contains__(self, key):
+        return hasattr(self, key)
+    
+    def __len__(self):
+        return len(self.__dict__)
+    
+    def __iter__(self):
+        for key in self.__dict__:
+            yield key
+    
+    def __repr__(self):
+        return f'{self.__class__.__name__}
+    
+    def __str__(self):
+        return self.to_string()
+    
+    @abstractmethod
+    def to_bytes(self) -> ByteString:
+        pass
+    
+    @abstractmethod
+    def to_string(self) -> str:
+        pass
+    
+    @abstractmethod
+    def summary(self) -> str:
+        pass
+
+    @classmethod
+    def generate_call_id(cls, lenght: int = 18) -> str:
+        return str(uuid4().hex[:lenght])
+    
+    @classmethod
+    def generate_branch(cls, lenght: int = 16) -> str:
+        return str(uuid4().hex[:lenght])
+
+    @classmethod
+    def generate_tag(cls, lenght: int = 8) -> str:
+        return str(uuid4().hex[:lenght])
+
+
+class AbstractMessageFactory(ABC):
+    pass
+
+
+class AbstractMessageParser(ABC):
+    pass
+
+
+class AbstractRequest(AbstractMessage):
+    pass
+
+
+class AbstractResponse(AbstractMessage):
+    pass
 
 
 # SIP Message Classes

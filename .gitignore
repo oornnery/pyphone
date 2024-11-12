@@ -12,6 +12,7 @@ __pycache__/
 pjproject
 pjproject-2.14.1
 pygui.js
+*.pcap
 
 # C extensions
 *.so
