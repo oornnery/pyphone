@@ -1,11 +1,11 @@
 Session Initiation Protocol (SIP as raw text)
-    INVITE sip:039959137@177.53.194.248:5060 SIP/2.0\r\n
-    Via: SIP/2.0/UDP 10.14.11.146:10060;branch=z9hG4bK8cafcde14db593eecde1f\r\n
-    From: "P2x9137" <sip:062099137@177.53.194.248:5060>;tag=3882100124\r\n
-    To: <sip:039959137@177.53.194.248:5060>\r\n
-    Call-ID: 0_3882207522@10.14.11.146\r\n
+    INVITE sip:user-1001@domain.sip.com:5060 SIP/2.0\r\n
+    Via: SIP/2.0/UDP local.domain.com:10060;branch=z9hG4bK8cafcde14db593eecde1f\r\n
+    From: "1001" <sip:user-1001@domain.sip.com:5060>;tag=3882100124\r\n
+    To: <sip:user-1001@domain.sip.com:5060>\r\n
+    Call-ID: 0_3882207522@local.domain.com\r\n
     CSeq: 1 INVITE\r\n
-    Contact: <sip:062099137@10.14.11.146:10060>\r\n
+    Contact: <sip:user-1001@local.domain.com:10060>\r\n
     Content-Type: application/sdp\r\n
     Allow: INVITE, INFO, PRACK, ACK, BYE, CANCEL, OPTIONS, NOTIFY, REGISTER, SUBSCRIBE, REFER, PUBLISH, UPDATE, MESSAGE\r\n
     Max-Forwards: 70\r\n
@@ -15,9 +15,9 @@ Session Initiation Protocol (SIP as raw text)
     Content-Length: 306\r\n
     \r\n
     v=0\r\n
-    o=- 20211 20211 IN IP4 10.14.11.146\r\n
+    o=- 20211 20211 IN IP4 local.domain.com\r\n
     s=SDP data\r\n
-    c=IN IP4 10.14.11.146\r\n
+    c=IN IP4 local.domain.com\r\n
     t=0 0\r\n
     m=audio 11808 RTP/AVP 9 0 8 18 101\r\n
     a=rtpmap:9 G722/8000\r\n
@@ -32,13 +32,13 @@ Session Initiation Protocol (SIP as raw text)
 
 Session Initiation Protocol (SIP as raw text)
     SIP/2.0 200 OK\r\n
-    Via: SIP/2.0/UDP 10.14.11.146:10060;rport=1024;received=187.75.34.66;branch=z9hG4bK8cafcde14db593eecde1f\r\n
-    Record-Route: <sip:177.53.194.248;transport=tcp;r2=on;ftag=3882100124;lr;did=e4c.5c22>\r\n
-    Record-Route: <sip:177.53.194.248:5060;r2=on;ftag=3882100124;lr;did=e4c.5c22>\r\n
-    From: "P2x9137" <sip:062099137@177.53.194.248:5060>;tag=3882100124\r\n
-    To: <sip:039959137@177.53.194.248:5060>;tag=as2a08438b\r\n
-    Call-ID: 0_3882207522@10.14.11.146\r\n
-    Contact: <sip:039959137@177.53.194.248:5060>\r\n
+    Via: SIP/2.0/UDP local.domain.com:10060;rport=1024;received=187.75.34.66;branch=z9hG4bK8cafcde14db593eecde1f\r\n
+    Record-Route: <sip:domain.sip.com;transport=tcp;r2=on;ftag=3882100124;lr;did=e4c.5c22>\r\n
+    Record-Route: <sip:domain.sip.com:5060;r2=on;ftag=3882100124;lr;did=e4c.5c22>\r\n
+    From: "P2x9137" <sip:user-1001@domain.sip.com:5060>;tag=3882100124\r\n
+    To: <sip:user-1001@domain.sip.com:5060>;tag=as2a08438b\r\n
+    Call-ID: 0_3882207522@local.domain.com\r\n
+    Contact: <sip:user-1001@domain.sip.com:5060>\r\n
     CSeq: 1 INVITE\r\n
     Server: IDT Brasil Hosted UA\r\n
     Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH\r\n
@@ -49,14 +49,14 @@ Session Initiation Protocol (SIP as raw text)
     Content-Length: 332\r\n
     \r\n
     v=0\r\n
-    o=root 221186565 221186565 IN IP4 177.53.194.248\r\n
+    o=root 221186565 221186565 IN IP4 domain.sip.com\r\n
     s=VoipNow\r\n
-    c=IN IP4 177.53.194.248\r\n
+    c=IN IP4 domain.sip.com\r\n
     t=0 0\r\n
     a=msid-semantic: WMS\r\n
     m=audio 18590 RTP/AVP 0 8 101\r\n
-    c=IN IP4 177.53.194.248\r\n
-    a=rtcp:18591 IN IP4 177.53.194.248\r\n
+    c=IN IP4 domain.sip.com\r\n
+    a=rtcp:18591 IN IP4 domain.sip.com\r\n
     a=rtpmap:0 PCMU/8000\r\n
     a=rtpmap:8 PCMA/8000\r\n
     a=rtpmap:101 telephone-event/8000\r\n
