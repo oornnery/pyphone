@@ -1,5 +1,4 @@
-from enum import Enum
-from typing import List
+from enum import Enum, auto
 import uuid
 
 
@@ -25,40 +24,7 @@ COMPACT_HEADERS = {
 }
 
 
-class Method(Enum):
-    REGISTER = "REGISTER"
-    INVITE = "INVITE"
-    ACK = "ACK"
-    BYE = "BYE"
-    CANCEL = "CANCEL"
-    OPTIONS = "OPTIONS"
-    PRACK = "PRACK"
-    SUBSCRIBE = "SUBSCRIBE"
-    NOTIFY = "NOTIFY"
-    PUBLISH = "PUBLISH"
-    INFO = "INFO"
-    REFER = "REFER"
-    MESSAGE = "MESSAGE"
-    UPDATE = "UPDATE"
-
-    def __str__(self) -> str:
-        return self._value_
-
-    def __repr__(self):
-        return self.__str__()
-
-    def __getitem__(self, method: str):
-        for m in Method:
-            if m._value_ == method:
-                return m
-        return None
-
-    @staticmethod
-    def methods() -> List[str]:
-        return [str(m) for m in Method]
-
-
-class StatusCode(Enum):
+class SIPStatusCode(Enum):
     # SIP Status Codes 1xx
     TRYING = (100, "Trying")
     RINGING = (180, "Ringing")
@@ -152,14 +118,14 @@ class StatusCode(Enum):
     def __repr__(self):
         return self
     
-    def __getitem__(self, code: int) -> 'StatusCode':
-        for status in StatusCode:
+    def __getitem__(self, code: int) -> 'SIPStatusCode':
+        for status in SIPStatusCode:
             if status.code == code:
                 return status
         return None
 
     def __contains__(self, code: int) -> bool:
-        return code in [status.code for status in StatusCode]
+        return code in [status.code for status in SIPStatusCode]
 
 
 
@@ -194,14 +160,45 @@ class ProtocolType(Enum):
         return self._value_
 
 
-class TransactionState(Enum):
-    INIT = "INIT"
-    EARLY = "EARLY"
-    TRYING = "TRYING"
-    PROCEEDING = "PROCEEDING"
-    COMPLETED = "COMPLETED"
-    TERMINATED = "TERMINATED"
 
+class SIPMessageType(Enum):
+    REGISTER = auto()
+    INVITE = auto()
+    INFO = auto()
+    OPTIONS = auto()
+    BYE = auto()
+    ACK = auto()
+    CANCEL = auto()
+    MESSAGE = auto()
+    NOTIFY = auto()
+    REFER = auto()
+    UPDATE = auto()
+
+
+class TransportProtocol(Enum):
+    UDP = auto()
+    TCP = auto()
+    TLS = auto()
+
+
+class DialogState(Enum):
+    INIT = auto()
+    EARLY = auto()
+    CONFIMED = auto()
+    TERMINATED = auto()
+
+
+class TransactionState(Enum):
+    TRYING = auto()
+    PROCEEDING = auto()
+    COMPLETD = auto()
+    TERMINATED = auto()
+
+
+class DTMFMode(Enum):
+    RFC2833 = auto()
+    INFO = auto()
+    INBAND = auto()
 
 def generate_branch():
     return f"z9hG4bK-{uuid.uuid4()[0:8]}"
