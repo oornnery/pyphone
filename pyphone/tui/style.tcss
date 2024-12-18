@@ -1,0 +1,107 @@
+* {
+    scrollbar-size: 1 1;
+}
+
+Screen {
+    overflow: auto;
+    layers: sidebar;
+}
+
+#root {
+    margin: 1;
+}
+
+
+Sidebar {
+    padding-right: 1;
+    width: 20;
+    height: 100%;
+    dock: left;
+    layer: sidebar;
+}
+
+Sidebar > Button {
+    width: 100%;
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+Sidebar.-hidden {
+    display: none;
+}
+
+Display {
+    width: 100%;
+    height: 6;
+    text-align: right;
+    content-align-vertical: middle;
+}
+
+Display > Input {
+    border: blank;
+    margin-bottom: 1;
+}
+
+Display > Label {
+    background: red;
+}
+
+Keypad {
+    layout: grid;
+    grid-size: 3 6;
+    grid-gutter: 1 0;
+    grid-rows: 3;
+}
+
+Keypad > Button {
+    border: blank;
+    height: 100%;
+    width: 100%;
+    margin-right: 1;
+    
+    &#keypad-enter {
+        column-span: 3;
+    }
+
+}
+
+DisplayLogs {
+    margin-top: 1;
+    height: 1;
+}
+
+ScreenContainer {
+    align: center middle;
+}
+
+ScreenContainer > Container {
+    background: $panel;
+    width: auto;
+    min-width: 40%;
+    max-width: 70%;
+    height: auto;
+    min-height: 20%;
+    max-height: 80%;
+    align: center middle;
+    padding: 2 4;
+
+}
+
+
+AccountsScreen Button {
+    width: 100%;
+    margin-top: 1;
+
+}
+
+AccountsScreen .account-item {
+    padding: 1;
+    margin-top: 1;
+    margin-bottom: 1;
+    margin-right: 1;
+}
+
+.account-item > Button {
+    margin-left: 1;
+}
+
