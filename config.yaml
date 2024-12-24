@@ -1,0 +1,18 @@
+# config_basic.yaml
+sip:
+  username: "user@example.com"
+  password: "your_password"
+  domain: "sip.example.com"
+  port: 5060
+  transport: "udp"
+
+media:
+  rtp_start_port: 10000
+  rtp_end_port: 20000
+  codecs:
+    - "PCMA"
+    - "PCMU"
+
+logging:
+  level: "INFO"
+  file: "pyphone.log"

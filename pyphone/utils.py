@@ -1,6 +1,23 @@
-from enum import Enum, auto
 import uuid
+import logging
+from enum import Enum, auto
 
+from rich.logging import RichHandler
+from rich.console import Console
+
+console = Console()
+
+logging.basicConfig(
+    level="NOTSET",
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(
+        rich_tracebacks=True,
+        console=console,
+        omit_repeated_times=False)],
+)
+
+log = logging.getLogger("pyphone")
 
 EOL = r'\r\n'
 SIP_SCHEME = 'SIP'

@@ -1,1507 +1,767 @@
-import logging
-import sys
-import re
-import hashlib
-import time
 import uuid
-import asyncio
+import time
+import socket
+import struct
+import threading
 import ssl
-import random
+import math
+import logging
+from enum import Enum
+import functools
+import asyncio
+import os
 from abc import ABC, abstractmethod
-from enum import Enum, auto
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple, Any, Callable, Set
-from datetime import datetime
-from asyncio import StreamReader, StreamWriter
-
-from rich.console import Console
-from rich.logging import RichHandler
-from rich.panel import Panel
+from typing import Dict, Optional, List, Callable
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/pyphone.log'),
-        logging.StreamHandler()
-    ]
-)
+class SDPMediaDescription:
+    def __init__(self, media_type: str, port: int, protocol: str, formats: List[str]):
+        self.media_type = media_type
+        self.port = port
+        self.protocol = protocol
+        self.formats = formats
 
-logger = logging.getLogger(__name__)
+    def __str__(self):
+        return f"m={self.media_type} {self.port} {self.protocol} {' '.join(self.formats)}"
 
+class SDPMessage:
+    def __init__(self, version: str = "0", origin: str = "", session_name: str = "", connection: str = "", time: str = "0 0", media: List[str] = None):
+        self.version = version
+        self.origin = origin
+        self.session_name = session_name
+        self.connection = connection
+        self.time = time
+        self.media = [SDPMediaDescription(*m.split(' ', 3)) for m in (media or [])]
 
-#############
-# Exception #
-#############
+    def __str__(self):
+        lines = [
+            f"v={self.version}",
+            f"o={self.origin}",
+            f"s={self.session_name}",
+            f"c={self.connection}",
+            f"t={self.time}"
+        ]
+        for media in self.media:
+            lines.append(str(media))
+        return "\r\n".join(lines)
 
-class SIPError(Exception):
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message)
-        self.details = details or {}
-        logger.error(Panel(f"[red]{message}[/red]\n\n{self.details}", title="SIP Error", subtitle=self.__class__.__name__, expand=False, border_style="red"))
+    @classmethod
+    def parse(cls, sdp_string: str):
+        lines = sdp_string.split("\r\n")
+        sdp = cls()
+        media = []
+        for line in lines:
+            match line:
+                case line if line.startswith("v="):
+                    sdp.version = line[2:]
+                case line if line.startswith("o="):
+                    sdp.origin = line[2:]
+                case line if line.startswith("s="):
+                    sdp.session_name = line[2:]
+                case line if line.startswith("c="):
+                    sdp.connection = line[2:]
+                case line if line.startswith("t="):
+                    sdp.time = line[2:]
+                case line if line.startswith("m="):
+                    media.append(line[2:])
+        sdp.media = media
+        return sdp
 
+class HeaderField:
+    def __init__(self, key: str, value: str):
+        self.key = key
+        self.value = value
 
-class ConfigError(SIPError):
-    pass
+    def __str__(self):
+        return f"{self.key}: {self.value}"
 
+class DTMFGenerator:
+    def __init__(self, sample_rate: int = 8000):
+        self.sample_rate = sample_rate
+        self.dtmf_freqs = {
+            '1': (697, 1209), '2': (697, 1336), '3': (697, 1477),
+            '4': (770, 1209), '5': (770, 1336), '6': (770, 1477),
+            '7': (852, 1209), '8': (852, 1336), '9': (852, 1477),
+            '*': (941, 1209), '0': (941, 1336), '#': (941, 1477),
+            'A': (697, 1633), 'B': (770, 1633), 'C': (852, 1633), 'D': (941, 1633)
+        }
 
-class AuthenticationError(SIPError):
-    pass
+    def generate_tone(self, digit: str, duration: float = 0.1) -> bytes:
+        if digit not in self.dtmf_freqs:
+            raise ValueError(f"Invalid DTMF digit: {digit}")
 
+        f1, f2 = self.dtmf_freqs[digit]
+        samples = int(self.sample_rate * duration)
+        tone = bytearray(samples * 2)
 
-class TransportError(SIPError):
-    pass
+        for i in range(samples):
+            t = i / self.sample_rate
+            sample = int(32767 * 0.5 * (math.sin(2 * math.pi * f1 * t) + math.sin(2 * math.pi * f2 * t)))
+            struct.pack_into("<h", tone, i * 2, sample)
 
+        return bytes(tone)
 
-class DialogError(SIPError):
-    pass
+class DTMFDetector:
+    def __init__(self, sample_rate: int = 8000):
+        self.sample_rate = sample_rate
+        self.dtmf_freqs = {
+            (697, 1209): '1', (697, 1336): '2', (697, 1477): '3',
+            (770, 1209): '4', (770, 1336): '5', (770, 1477): '6',
+            (852, 1209): '7', (852, 1336): '8', (852, 1477): '9',
+            (941, 1209): '*', (941, 1336): '0', (941, 1477): '#',
+            (697, 1633): 'A', (770, 1633): 'B', (852, 1633): 'C', (941, 1633): 'D'
+        }
 
+    def detect(self, audio_data: bytes) -> Optional[str]:
+        # Implement Goertzel algorithm for DTMF detection
+        # This is a simplified version and may need improvement for real-world use
+        samples = struct.unpack(f"<{len(audio_data)//2}h", audio_data)
+        freqs = [697, 770, 852, 941, 1209, 1336, 1477, 1633]
+        detected = []
 
-class TransactionError(SIPError):
-    pass
+        for freq in freqs:
+            coeff = 2 * math.cos(2 * math.pi * freq / self.sample_rate)
+            s_prev = 0
+            s_prev2 = 0
+            for sample in samples:
+                s = sample + coeff * s_prev - s_prev2
+                s_prev2 = s_prev
+                s_prev = s
+            power = s_prev2 * s_prev2 + s_prev * s_prev - coeff * s_prev * s_prev2
+            if power > 1e6:  # Threshold may need adjustment
+                detected.append(freq)
 
+        if len(detected) == 2:
+            low_freq = min(detected)
+            high_freq = max(detected)
+            return self.dtmf_freqs.get((low_freq, high_freq))
 
-class MediaError(SIPError):
-    pass
-
-
-class SDPError(SIPError):
-    pass
-
-
-class DTMFError(SIPError):
-    pass
-
-
-class TimeoutError(SIPError):
-    pass
-
-
-#######################
-# Enum and structures #
-#######################
-
-class LogLevel(Enum):
-    DEBUG = auto()
-    INFO = auto()
-    WARNING = auto()
-    ERROR = auto()
-    CRITICAL = auto()
-
+        return None
 
 class SIPMethod(Enum):
-    REGISTER = auto()
-    INVITE = auto()
-    ACK = auto()
-    BYE = auto()
-    CANCEL = auto()
-    OPTIONS = auto()
-    INFO = auto()
-    MESSAGE = auto()
-    NOTIFY = auto()
-    SUBSCRIBE = auto()
-    REFER = auto()
-    UPDATE = auto()
-    PRACK = auto()
-
+    INVITE = "INVITE"
+    ACK = "ACK"
+    BYE = "BYE"
+    CANCEL = "CANCEL"
+    REGISTER = "REGISTER"
+    OPTIONS = "OPTIONS"
+    INFO = "INFO"
+    MESSAGE = "MESSAGE"
 
 class SIPStatusCode(Enum):
-    pass
-
-
-class TransportProtocol(Enum):
-    UDP = auto()
-    TCP = auto()
-    TLS = auto()
-    WS = auto()
-    WSS = auto()
-
-
-class DialogState(Enum):
-    INIT = auto()
-    EARLY = auto()
-    CONFIRMED = auto()
-    TERMINATED = auto()
-
-
-class TransactionState(Enum):
-    TRYING = auto()
-    PROCEEDING = auto()
-    CALLING = auto()
-    COMPLETED = auto()
-    CONFIRMED = auto()
-    CANCELLED = auto()
-    FAILED = auto()
-    TERMINATED = auto()
-
-
-class MediaType(Enum):
-    AUDIO = auto()
-    VIDEO = auto()
-    TEXT = auto()
-    APPLICATION = auto()
-    MESSAGE = auto()
-
-
-class AuthState(Enum):
-    INIT = auto()
-    UNAUTHORIZED = auto()
-    AUTHORIZED = auto()
-    FAILED = auto()
-
-
-@dataclass
-class NetworkConfig:
-    local_ip: str
-    local_port: int
-    remote_ip: str
-    remote_port: int
-    transport: TransportProtocol = TransportProtocol.UDP
-    use_tls: bool = False
-    tls_cert: Optional[str] = None
-    tls_key: Optional[str] = None
-
-
-@dataclass
-class MediaConfig:
-    rtp_port_range: Tuple[int, int] = (10000, 20000)
-    supported_codecs: Dict[str, List[str]] = field(default_factory=lambda: {
-        'audio': ['PCMU', 'PCMA', 'telephone-event'],
-        'video': ['H264', 'VP8']
-    })
-    dtmf_mode: str = "rfc2833"
-    ptime: int = 20
-    maxptime: int = 150
-
-
-@dataclass
-class SIPConfig:
-    network: NetworkConfig
-    media: MediaConfig
-    keep_alive_interval: int = 30
-    registration_interval: int = 3600
-    timeout: int = 5
-    max_retries: int = 3
-    user_agent: str = "Pyphone"
-    log_level: LogLevel = LogLevel.INFO
-
-    def __post_init__(self):
-        self.validate()
-
-    def validate(self):
-        if not self.network.local_ip:
-            raise ConfigError("Local IP is required")
-        if not (0 < self.network.local_port < 65536):
-            raise ConfigError("Invalid local port")
-        if not self.network.remote_ip:
-            raise ConfigError("Remote IP is required")
-        if not (0 < self.network.remote_port < 65536):
-            raise ConfigError("Invalid remote port")
-        if self.network.use_tls and not (self.network.tls_cert and self.network.tls_key):
-            raise ConfigError("TLS certificates required when TLS is enabled")
-        if not (0 <= self.media.rtp_port_range[0] < self.media.rtp_port_range[1] <= 65535):
-            raise ConfigError("Invalid RTP port range")
-
-
-@dataclass
-class AuthCredentials:
-    username: str
-    password: str
-    realm: str
-    nonce: str = None
-    algorithm: str = field(default="MD5")
-    qop: str = field(default="auth")
-    cnonce: str = None
-    nc: int = field(default=0)
-    status: AuthState = field(default=AuthState.INIT)
-
-
-@dataclass
-class Uri:
-    scheme: str
-    user: str
-    host: str
-    port: str = None
-
-    def __str__(self):
-        return f"{self.scheme}{self.user}@{self.host}{f':{self.port}' if self.port else ''}"
-
-
-@dataclass
-class HeaderField:
-    name: str
-    value: str
-
-    def __str__(self):
-        return f"{self.name}: {self.value}"
-
-
-@dataclass
-class SDPField:
-    name: str
-    value: str
-
-    def __str__(self):
-        return f"{self.name}={self.value}"
-
-
-
-#########
-# Utils #
-#########
-
-
-def generate_branch() -> str:
-    return f"z9hG4bK{uuid.uuid4().hex[:8]}"
-
-def generate_tag() -> str:
-    return uuid.uuid4().hex[:8]
-
-def generate_call_id() -> str:
-    return str(uuid.uuid4())
-
-def parse_uri(uri: str) -> Dict[str, str]:
-    try:
-        if uri.startswith(("sip:", "sips:")):
-            scheme = uri[:4] if uri.startswith("sip:") else uri[:5]
-            rest = uri[len(scheme):]
-        else:
-            scheme = "sip:"
-            rest = uri
-
-        # split user@host:port
-        if '@' in rest:
-            user, host_port = rest.split('@', 1)
-        else:
-            user, host_port = None, rest
-
-        # split host:port
-        if ':' in host_port:
-            host, port = host_port.rsplit(':', 1)
-        else:
-            host, port = host_port, None
-
-        return {
-            'scheme': scheme,
-            'user': user,
-            'host': host,
-            'port': port
-        }
-    except Exception as e:
-        raise ConfigError(f"Invalid SIP URI: {e}")
-
-
-##################
-# Authentication #
-##################
-
-class SIPAuthentication:
-    def __init__(self, credentials: AuthCredentials):
-        self.credentials = credentials
-    
-    def parser_auth_header(self, auth_header: str) -> None:
-        try:
-            # parser realm, nonce, qop, algorithm
-            realm, nonce, qop, algorithm = 'realm="([^"]+)"', 'nonce="([^"]+)"', \
-                'qop="?([^",]+)"?', 'algorithm="?([^",]+)"?'
-            if match := re.search(realm, auth_header):
-                self.credentials['realm'] = match.group(1)
-            if match := re.search(nonce, auth_header):
-                self.credentials['nonce'] = match.group(1)
-            if match := re.search(qop, auth_header):
-                self.credentials['qop'] = match.group(1)
-            if match := re.search(algorithm, auth_header):
-                self.credentials['algorithm'] = match.group(1)
-            logger.debug(
-                f"Parsed auth header: realm={self.credentials.realm}, "
-                f"nonce={self.credentials.nonce}, qop={self.credentials.qop}"
-            )
-        except Exception as e:
-            raise AuthenticationError(f"Failed to parse auth header: {e}")
-    
-    def generate_response(self, method: SIPMethod, uri: str) -> Dict[str, str]:
-        try:
-            # generate HA1
-            ha1 = hashlib.md5(
-                f"{self.credentials.username}:{self.credentials.realm}:"
-                f"{self.credentials.password}".encode()
-            ).hexdigest()
-            
-            # Gera HA2
-            ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
-            if self.credentials.qop:
-                self.credentials.nc
-                self.credentials.cnonce = hashlib.md5(
-                    str(time.time()).encode()
-                ).hexdigest()[:8]
-
-                response = hashlib.md5(
-                    f"{ha1}:{self.credentials.nonce}:"
-                    f"{self.credentials.nc:08x}:{self.credentials.cnonce}:"
-                    f"{self.credentials.qop}:{ha2}".encode()
-                ).hexdigest()
-
-                auth_params = {
-                    "username": self.credentials.username,
-                    "realm": self.credentials.realm,
-                    "nonce": self.credentials.nonce,
-                    "uri": uri,
-                    "response": response,
-                    "algorithm": self.credentials.algorithm,
-                    "qop": self.credentials.qop,
-                    "nc": f"{self.credentials.nc:08x}",
-                    "cnonce": self.credentials.cnonce
-                }
-            else:
-                response = hashlib.md5(
-                    f"{ha1}:{self.credentials.nonce}:{ha2}".encode()
-                ).hexdigest()
-
-                auth_params = {
-                    "username": self.credentials.username,
-                    "realm": self.credentials.realm,
-                    "nonce": self.credentials.nonce,
-                    "uri": uri,
-                    "response": response,
-                    "algorithm": self.credentials.algorithm
-                }
-
-            return auth_params
-
-        except Exception as e:
-            logger.error(f"Error generating auth response: {e}")
-            raise AuthenticationError(f"Failed to generate auth response: {e}")
-
-
-#############
-# Transport #
-#############
-
-class TransportBase(ABC):
-    
-    def __init__(self, config=NetworkConfig):
-        self.config = config
-        self.running = False
-    
-    @abstractmethod
-    async def start(self) -> None:
-        raise SIPError("Transport start method not implemented")
-    
-    @abstractmethod
-    async def stop(self) -> None:
-        raise SIPError("Transport stop method not implemented")
-    
-    @abstractmethod
-    async def send(self, data: bytes) -> None:
-        raise SIPError("Transport send method not implemented")
-    
-    @abstractmethod
-    async def set_receive_callback(self, callback) -> None:
-        raise SIPError("Transport set_receive_callback method not implemented")
-    
-
-class AsyncTransport(TransportBase):
-    def __init__(self, config: NetworkConfig):
-        super().__init__(config)
-        self.transport = None
-        self.protocol = None
-        self.server = None
-        self.connections: Dict[tuple, StreamWriter] = {}
-        self.receive_callback = None
-        self.ssl_context = (self._create_ssl_context()
-            if config.transport == TransportProtocol.TLS else None)
-    
-    class UDPProtocol(asyncio.DatagramProtocol):
-        def __init__(self, receive_callback: Callable):
-            self.receive_callback = receive_callback
-
-        def datagram_received(self, data: bytes, addr: tuple):
-            if not self.receive_callback:
-                return
-            asyncio.create_task(self.receive_callback(data.decode(), addr))
-    
-    def _create_ssl_context(self):
-        try:
-            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            if self.config.tls_cert and self.config.tls_key:
-                context.load_cert_chain(
-                    self.config.tls_cert,
-                    self.config.tls_key)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            return context
-        except Exception as e:
-            raise TransportError(f"Failed to create SSL context:", e)
-
-    async def start(self):
-        try:
-            match self.config.transport:
-                case TransportProtocol.UDP:
-                    loop = asyncio.get_running_loop()
-                    self.transport, self.protocol = await loop.create_datagram_endpoint(
-                        lambda: self.UDPProtocol(self.receive_callback),
-                        local_addr=(self.config.local_ip, self.config.local_port)
-                    )
-                case TransportProtocol.TCP | TransportProtocol.TLS:
-                    ssl_context = (self.ssl_context if 
-                        self.config.transport == TransportProtocol.TLS else None)
-                    self.server = await asyncio.start_server(
-                        self._handle_connection,
-                        self.config.local_ip,
-                        self.config.local_port,
-                        ssl=ssl_context
-                    )
-                case _:
-                    raise TransportError(f"Unsupported transport protocol: {self.config.transport}")
-            if self.config.transport in (TransportProtocol.TCP, TransportProtocol.TLS):
-                asyncio.create_task(self.server.serve_forever())
-            self.running = True
-            logger.info(f"{self.config.transport} transport started on {self.config.local_ip}:{self.config.local_port}")
-        except Exception as e:
-            raise TransportError(f"Failed to start UDP transport: {e}")
-    
-    async def stop(self):        
-        try:
-            if (self.config.transport == TransportProtocol.UDP and self.transport):
-                self.transport.close()
-                return
-            if self.server:
-                self.server.close()
-                await self.server.wait_closed()
-            for writer in self.connections.values():
-                writer.close()
-                await writer.wait_closed()
-        except Exception as e:
-            raise TransportError(f"Failed to stop transport: {e}")
-        else:
-            self.running = False
-            logger.info(f"{self.config.transport} transport stopped")
-
-    async def send(self, message: str, address: Tuple[str, int]):
-        try:
-            if not self.transport:
-                raise TransportError("Transport not initialized")
-
-            match self.config.transport:
-                case TransportProtocol.UDP:
-                    self.transport.sendto(message.encode(), address)
-                case TransportProtocol.TCP | TransportProtocol.TLS:
-                    if address not in self.connections:
-                        ssl_context = (self.ssl_context if self.config.transport == TransportProtocol.TLS else None)
-                        reader, writer = await asyncio.open_connection(
-                            *address, 
-                            ssl=ssl_context
-                        )
-                        self.connections[address] = writer
-                case _:
-                    raise TransportError(f"Unsupported transport protocol: {self.config.transport}")
-            
-            if self.config.transport in (TransportProtocol.TCP, TransportProtocol.TLS):
-                writer = self.connections[address]
-                writer.write(message.encode())
-                await writer.drain()
-            logger.debug(f"Sent message to {address}: {message}")
-        except Exception as e:
-            raise TransportError(f"Failed to send UDP message: {e}")
-
-    async def set_receive_callback(self, callback: Callable):
-        self.receive_callback = callback
-        logger.debug("Receive callback set")
-
-    async def _handle_connection(self, reader: StreamReader, writer: StreamWriter):
-        addr = writer.get_extra_info('peername')
-        self.connections[addr] = writer
-        try:
-            while self.running:
-                data = await reader.read(8192)
-                if not data:
-                    break
-                if self.receive_callback:
-                    await self.receive_callback(data.decode(), addr)
-        except Exception as e:
-            logger.error(f"Error handling {self.config.transport} connection: {e}")
-        finally:
-            writer.close()
-            await writer.wait_closed()
-            del self.connections[addr]
-
-
-class TransportManager:    
-    def __init__(self, config: NetworkConfig):
-        self.config = config
-        self.transport = AsyncTransport(config)
-
-    async def start(self, receive_callback: Callable):
-        await self.transport.set_receive_callback(receive_callback)
-        await self.transport.start()
-
-    async def stop(self):
-        await self.transport.stop()
-
-    async def send_message(self, message: str, address: tuple):
-        await self.transport.send(message, address)    
-
-
-###############
-# SIP Message #
-###############
-
-class Headers:
-    _headers: List[HeaderField] = []
-
-    def __str__(self):
-        return '\r\n'.join([str(h) for h in self._headers])
-    
-    def add(self, header: HeaderField):
-        self._headers.append(header)
-    
-    def remove(self, name: str):
-        self._headers = [h for h in self._headers if h.name != name]
-    
-    def get(self, name: str) -> Optional[HeaderField]:
-        for header in self._headers:
-            if header.name == name:
-                return header
-        return None
-
-
-class Body:
-    _sdp: List[SDPField] = []
-
-    def __str__(self):
-        return '\r\n'.join([str(s) for s in self._sdp])
-    
-    def add(self, sdp: SDPField):
-        self._sdp.append(sdp)
-    
-    def remove(self, name: str):
-        self._sdp = [s for s in self._sdp if s.name != name]
-    
-    def get(self, name: str) -> Optional[SDPField]:
-        for sdp in self._sdp:
-            if sdp.name == name:
-                return sdp
-        return None
-
-
-@dataclass
-class SDPMediaFormat:
-    """Formato de mídia SDP"""
-    payload_type: int
-    encoding_name: str
-    clock_rate: int
-    channels: Optional[int] = None
-    parameters: Dict[str, str] = field(default_factory=dict)
-
-    def __str__(self) -> str:
-        fmt = f"{self.encoding_name}/{self.clock_rate}"
-        if self.channels and self.channels > 1:
-            fmt += f"/{self.channels}"
-        return fmt
-
-@dataclass
-class SDPMediaDescription:
-    """Descrição de mídia SDP"""
-    type: str
-    port: int
-    protocol: str
-    formats: List[SDPMediaFormat]
-    attributes: List[str] = field(default_factory=list)
-    bandwidth: Dict[str, int] = field(default_factory=dict)
-    connection: Optional[str] = None
-
-class SDPManager:
-    """Gerenciador de SDP"""
-
-    def __init__(self, config: MediaConfig):
-        self.config = config
-        self.logger = logger
-
-    def create_offer(self, local_ip: str, media_port: int) -> str:
-        """Cria oferta SDP"""
-        try:
-            session_id = int(time.time())
-            sdp_lines = [
-                "v=0",
-                f"o=- {session_id} {session_id} IN IP4 {local_ip}",
-                "s=SIP Call",
-                f"c=IN IP4 {local_ip}",
-                "t=0 0"
-            ]
-
-            # Adiciona descrição de mídia de áudio
-            audio_formats = []
-            for codec in self.config.supported_codecs['audio']:
-                if codec == 'PCMU':
-                    audio_formats.append(SDPMediaFormat(0, 'PCMU', 8000, 1))
-                elif codec == 'PCMA':
-                    audio_formats.append(SDPMediaFormat(8, 'PCMA', 8000, 1))
-                elif codec == 'telephone-event':
-                    audio_formats.append(SDPMediaFormat(101, 'telephone-event', 8000))
-
-            media_desc = self._create_media_description(
-                'audio', media_port, audio_formats
-            )
-            sdp_lines.extend(self._format_media_description(media_desc))
-
-            return "\r\n".join(sdp_lines) + "\r\n"
-
-        except Exception as e:
-            self.logger.error(f"Error creating SDP offer: {e}")
-            raise SDPError(f"Failed to create SDP offer: {e}")
-
-    def parse_sdp(self, sdp: str) -> Dict[str, Any]:
-        """Parse de SDP"""
-        try:
-            result = {
-                'version': 0,
-                'origin': {},
-                'session_name': '',
-                'connection': {},
-                'time': [],
-                'media': []
-            }
-
-            lines = sdp.strip().split("\r\n")
-            current_media = None
-
-            for line in lines:
-                type_, value = line[0], line[2:]
-
-                if type_ == 'v':
-                    result['version'] = int(value)
-                elif type_ == 'o':
-                    parts = value.split()
-                    result['origin'] = {
-                        'username': parts[0],
-                        'session_id': parts[1],
-                        'session_version': parts[2],
-                        'network_type': parts[3],
-                        'address_type': parts[4],
-                        'address': parts[5]
-                    }
-                elif type_ == 'c':
-                    parts = value.split()
-                    result['connection'] = {
-                        'network_type': parts[0],
-                        'address_type': parts[1],
-                        'address': parts[2]
-                    }
-                elif type_ == 'm':
-                    parts = value.split()
-                    current_media = {
-                        'type': parts[0],
-                        'port': int(parts[1]),
-                        'protocol': parts[2],
-                        'formats': parts[3:],
-                        'attributes': []
-                    }
-                    result['media'].append(current_media)
-                elif type_ == 'a' and current_media:
-                    current_media['attributes'].append(value)
-
-            return result
-
-        except Exception as e:
-            self.logger.error(f"Error parsing SDP: {e}")
-            raise SDPError(f"Failed to parse SDP: {e}")
-
-    def _create_media_description(self, media_type: str, port: int, 
-                                formats: List[SDPMediaFormat]) -> SDPMediaDescription:
-        """Cria descrição de mídia"""
-        media_desc = SDPMediaDescription(
-            type=media_type,
-            port=port,
-            protocol="RTP/AVP",
-            formats=formats
-        )
-
-        # Adiciona atributos comuns
-        media_desc.attributes.append("sendrecv")
-        media_desc.attributes.append(f"ptime:{self.config.ptime}")
-        media_desc.attributes.append(f"maxptime:{self.config.maxptime}")
-
-        # Adiciona rtpmap para cada formato
-        for fmt in formats:
-            media_desc.attributes.append(
-                f"rtpmap:{fmt.payload_type} {fmt}"
-            )
-            if fmt.parameters:
-                params = " ".join(
-                    f"{k}={v}" if v else k
-                    for k, v in fmt.parameters.items()
-                )
-                media_desc.attributes.append(
-                    f"fmtp:{fmt.payload_type} {params}"
-                )
-
-        return media_desc
-
-    def _format_media_description(self, media_desc: SDPMediaDescription) -> List[str]:
-        """Formata descrição de mídia em linhas SDP"""
-        lines = []
-        
-        # Linha de mídia
-        formats_str = " ".join(str(fmt.payload_type) for fmt in media_desc.formats)
-        lines.append(
-            f"m={media_desc.type} {media_desc.port} {media_desc.protocol} {formats_str}"
-        )
-
-        # Conexão específica se diferente da global
-        if media_desc.connection:
-            lines.append(f"c={media_desc.connection}")
-
-        # Bandwidth
-        for bw_type, value in media_desc.bandwidth.items():
-            lines.append(f"b={bw_type}:{value}")
-
-        # Atributos
-        for attr in media_desc.attributes:
-            lines.append(f"a={attr}")
-
-        return lines
-
-class DTMFEvent:
-    """Evento DTMF"""
-    
-    DTMF_EVENTS = {
-        '0': 0, '1': 1, '2': 2, '3': 3, '4': 4,
-        '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
-        '*': 10, '#': 11, 'A': 12, 'B': 13, 'C': 14, 'D': 15
-    }
-
-    def __init__(self, digit: str, duration: int = 160, volume: int = 10):
-        if digit.upper() not in self.DTMF_EVENTS:
-            raise ValueError(f"Invalid DTMF digit: {digit}")
-            
-        self.digit = digit.upper()
-        self.event_id = self.DTMF_EVENTS[self.digit]
-        self.duration = min(duration, 16000)  # RFC limitation
-        self.volume = max(0, min(volume, 63))  # RFC limitation
-        self.timestamp = int(time.time() * 1000)
-        self.end = False
-
-class DTMFManager:
-    """Gerenciador de DTMF"""
-
-    def __init__(self, mode: str = "rfc2833"):
-        self.mode = mode
-        self.callbacks: Dict[str, Set[Callable]] = {
-            'on_dtmf_sent': set(),
-            'on_dtmf_received': set(),
-            'on_error': set()
-        }
-        self.logger = logger
-
-    async def send_dtmf(self, digit: str, duration: int = 160) -> None:
-        """Envia DTMF"""
-        try:
-            event = DTMFEvent(digit, duration)
-            
-            if self.mode == "rfc2833":
-                await self._send_rfc2833(event)
-            elif self.mode == "info":
-                await self._send_info(event)
-            
-            await self._trigger_callbacks('on_dtmf_sent', event)
-            
-        except Exception as e:
-            self.logger.error(f"Error sending DTMF: {e}")
-            await self._trigger_callbacks('on_error', e)
-
-    async def _send_rfc2833(self, event: DTMFEvent) -> None:
-        """Envia DTMF via RFC 2833"""
-        try:
-            # Implementação do envio RFC 2833
-            # Este é um placeholder - a implementação real depende do RTP
-            pass
-        except Exception as e:
-            raise DTMFError(f"Failed to send RFC2833 DTMF: {e}")
-
-    async def _send_info(self, event: DTMFEvent) -> None:
-        """Envia DTMF via SIP INFO"""
-        try:
-            # Implementação do envio INFO
-            # Este é um placeholder - a implementação real depende do SIP
-            pass
-        except Exception as e:
-            raise DTMFError(f"Failed to send INFO DTMF: {e}")
-
-    def add_callback(self, event: str, callback: Callable) -> None:
-        """Adiciona callback para evento"""
-        if event in self.callbacks:
-            self.callbacks[event].add(callback)
-
-    async def _trigger_callbacks(self, event: str, *args, **kwargs) -> None:
-        """Dispara callbacks para um evento"""
-        if event in self.callbacks:
-            for callback in self.callbacks[event]:
-                try:
-                    if asyncio.iscoroutinefunction(callback):
-                        await callback(*args, **kwargs)
-                    else:
-                        callback(*args, **kwargs)
-                except Exception as e:
-                    self.logger.error(f"Error in DTMF callback: {e}")
+    OK = (200, "OK")
+    RINGING = (180, "Ringing")
+    TRYING = (100, "Trying")
+    BAD_REQUEST = (400, "Bad Request")
+    UNAUTHORIZED = (401, "Unauthorized")
+    NOT_FOUND = (404, "Not Found")
+    REQUEST_TIMEOUT = (408, "Request Timeout")
+    INTERNAL_SERVER_ERROR = (500, "Internal Server Error")
+
+    def __init__(self, code, reason):
+        self.code = code
+        self.reason = reason
 
 
 class SIPMessage:
-    def __init__(self, 
-            raw: Optional[str] = None,
-            method: Optional[SIPMethod] = None,
-            status_code: Optional[SIPStatusCode] = None,
-            uri: Optional[Uri] = None,
-            headers: Optional[Headers] = None,
-            body: Optional[Body] = None
-            ):
-        self.raw = raw
+    def __init__(self, method: Optional[SIPMethod] = None, status: Optional[SIPStatusCode] = None, uri: Optional[str] = None, headers: Dict[str, str] = None, body: Optional[str] = None):
         self.method = method
-        self.status_code = status_code
+        self.status = status
         self.uri = uri
-        self.headers = headers or Headers()
-        self.body = body or Body()
+        self.headers = headers or {}
+        self.body = body
 
-    @property
-    def is_request(self) -> bool:
-        return self.method is not None
+    def serialize(self) -> bytes:
+        lines = []
+        if self.method:
+            lines.append(f"{self.method.value} {self.uri} SIP/2.0")
+        elif self.status:
+            lines.append(f"SIP/2.0 {self.status.code} {self.status.reason}")
+        for key, value in self.headers.items():
+            lines.append(f"{key}: {value}")
+        lines.append("")
+        if self.body:
+            lines.append(self.body)
+        return "\r\n".join(lines).encode()
 
-    @property
-    def is_response(self) -> bool:
-        return self.status_code is not None
-
-    @property
-    def summary(self) -> str:
-        return ''
-    
-    @staticmethod
-    def build_request(
-        cls,
-        method: SIPMethod,
-        uri: Uri,
-        headers: Headers,
-        body: Body
-    ) -> 'SIPMessage':
-        
-        return cls(method=method, uri=uri, headers=headers, body=body)
-    
-    
-    @staticmethod
-    def build_response(
-        cls,
-        status_code: SIPStatusCode,
-        headers: Headers,
-        body: Body
-    ) -> 'SIPMessage':
-        
-        return cls(status_code=status_code, headers=headers, body=body)
-
-    @staticmethod
-    def parse_message(raw: str) -> 'SIPMessage':
-    
-        return SIPMessage(raw=raw)
-
-
-class SIPTransaction:
-    def __init__(self, method: SIPMethod, message: SIPMessage, branch: str):
-        self.method = method
-        self.branch = branch
-        self.state = TransactionState.TRYING
-        self.request: Optional[SIPMessage] = None
-        self.responses: List[SIPMessage] = []
-        self.created_at = datetime.now()
-        self.completed_at: Optional[datetime] = None
-        self.retries = 0
-        self.max_retries = 3
-        self.timeout = 32
-        self.callbacks: Dict[str, Set[Callable]] = {
-            'on_trying': set(),
-            'on_proceeding': set(),
-            'on_completed': set(),
-            'on_terminated': set(),
-            'on_timeout': set(),
-            'on_error': set()
-        }
-
-    async def add_response(self, response: SIPMessage) -> None:
-        try:
-            self.responses.append(response)
-            #TODO: Update state based on response status code
-            await self._update_state(TransactionState.PROCEEDING)
-                
-        except Exception as e:
-            logger.error(f"Error adding response: {e}")
-            await self._trigger_callbacks('on_error', e)
-
-    async def _update_state(self, new_state: TransactionState) -> None:
-        """Atualiza estado da transação"""
-        if new_state != self.state:
-            old_state = self.state
-            self.state = new_state
-            logger.debug(
-                f"Transaction {self.branch} state changed: {old_state} -> {new_state}"
-            )
-            
-            # Trigger callbacks baseado no novo estado
-            if new_state == TransactionState.TRYING:
-                await self._trigger_callbacks('on_trying')
-            elif new_state == TransactionState.PROCEEDING:
-                await self._trigger_callbacks('on_proceeding')
-            elif new_state == TransactionState.COMPLETED:
-                await self._trigger_callbacks('on_completed')
-            elif new_state == TransactionState.TERMINATED:
-                await self._trigger_callbacks('on_terminated')
-
-    def add_callback(self, event: str, callback: Callable) -> None:
-        """Adiciona callback para evento"""
-        if event in self.callbacks:
-            self.callbacks[event].add(callback)
-
-    async def _trigger_callbacks(self, event: str, *args, **kwargs) -> None:
-        """Dispara callbacks para um evento"""
-        if event in self.callbacks:
-            for callback in self.callbacks[event]:
-                try:
-                    if asyncio.iscoroutinefunction(callback):
-                        await callback(*args, **kwargs)
-                    else:
-                        callback(*args, **kwargs)
-                except Exception as e:
-                    logger.error(f"Error in transaction callback: {e}")
-
+    @classmethod
+    def deserialize(cls, data: bytes):
+        lines = data.decode().split("\r\n")
+        first_line = lines.pop(0)
+        headers = {}
+        body = None
+        if first_line.startswith("SIP/2.0"):
+            method, uri = None, None
+            status = next((s for s in SIPStatusCode if str(s.code) in first_line), None)
+        else:
+            method, uri, _ = first_line.split(" ", 2)
+            status = None
+        for line in lines:
+            if not line:
+                body = "\r\n".join(lines[lines.index(line) + 1:])
+                break
+            key, value = line.split(": ", 1)
+            headers[key] = value
+        return cls(
+            method=SIPMethod(method) if method else None,
+            status=status,
+            uri=uri,
+            headers=headers,
+            body=body
+        )
 
 class SIPDialog:
-    def __init__(self, call_id: str, local_tag: str, remote_tag: Optional[str] = None):
+    def __init__(self, call_id: str, local_uri: str, remote_uri: str):
         self.call_id = call_id
-        self.local_tag = local_tag
-        self.remote_tag = remote_tag
-        self.local_seq = random.randint(1, 65535)
+        self.local_uri = local_uri
+        self.remote_uri = remote_uri
+        self.state = "INIT"
+        self.local_seq = 0
         self.remote_seq = 0
-        self.state = DialogState.INIT
-        self.local_uri: Optional[str] = None
-        self.remote_uri: Optional[str] = None
-        self.remote_target: Optional[str] = None
-        self.secure = False
-        self.created_at = datetime.now()
-        self.transactions: Dict[str, SIPTransaction] = {}
-        self.callbacks: Dict[str, Set[Callable]] = {
-            'on_state_changed': set(),
-            'on_terminated': set(),
-            'on_error': set()
-        }
 
-    async def update_state(self, new_state: DialogState) -> None:
-        """Atualiza estado do diálogo"""
-        if new_state != self.state:
-            old_state = self.state
-            self.state = new_state
-            logger.debug(
-                f"Dialog {self.call_id} state changed: {old_state} -> {new_state}"
-            )
-            await self._trigger_callbacks('on_state_changed', old_state, new_state)
+    def update_state(self, new_state: str):
+        log.info(f"Dialog {self.call_id} state changed from {self.state} to {new_state}")
+        self.state = new_state
 
-    def add_transaction(self, transaction: SIPTransaction) -> None:
-        """Adiciona transação ao diálogo"""
-        self.transactions[transaction.branch] = transaction
+class SIPException(Exception):
+    pass
 
-    def get_transaction(self, branch: str) -> Optional[SIPTransaction]:
-        """Recupera transação pelo branch"""
-        return self.transactions.get(branch)
+class RTPPacket:
+    def __init__(self, payload_type: int, sequence_number: int, timestamp: int, ssrc: int, payload: bytes):
+        self.version = 2
+        self.padding = 0
+        self.extension = 0
+        self.csrc_count = 0
+        self.marker = 0
+        self.payload_type = payload_type
+        self.sequence_number = sequence_number
+        self.timestamp = timestamp
+        self.ssrc = ssrc
+        self.payload = payload
 
-    def add_callback(self, event: str, callback: Callable) -> None:
-        """Adiciona callback para evento"""
-        if event in self.callbacks:
-            self.callbacks[event].add(callback)
+    def pack(self) -> bytes:
+        header = struct.pack(
+            "!BBHII",
+            (self.version << 6) | (self.padding << 5) | (self.extension << 4) | self.csrc_count,
+            (self.marker << 7) | self.payload_type,
+            self.sequence_number,
+            self.timestamp,
+            self.ssrc
+        )
+        return header + self.payload
 
-    async def _trigger_callbacks(self, event: str, *args, **kwargs) -> None:
-        """Dispara callbacks para um evento"""
-        if event in self.callbacks:
-            for callback in self.callbacks[event]:
-                try:
-                    if asyncio.iscoroutinefunction(callback):
-                        await callback(*args, **kwargs)
-                    else:
-                        callback(*args, **kwargs)
-                except Exception as e:
-                    logger.error(f"Error in dialog callback: {e}")
-
-
-class DialogManager:
-    """Gerenciador de diálogos SIP"""
-
-    def __init__(self):
-        self.dialogs: Dict[str, SIPDialog] = {}
-
-    def create_dialog(self, call_id: str, local_tag: str, 
-                     remote_tag: Optional[str] = None) -> SIPDialog:
-        """Cria novo diálogo"""
-        dialog = SIPDialog(call_id, local_tag, remote_tag)
-        self.dialogs[call_id] = dialog
-        return dialog
-
-    def get_dialog(self, call_id: str) -> Optional[SIPDialog]:
-        """Recupera diálogo pelo Call-ID"""
-        return self.dialogs.get(call_id)
-
-    async def terminate_dialog(self, call_id: str) -> None:
-        """Termina um diálogo"""
-        dialog = self.dialogs.get(call_id)
-        if dialog:
-            await dialog.update_state(DialogState.TERMINATED)
-            await dialog._trigger_callbacks('on_terminated')
-            del self.dialogs[call_id]
-
-    def find_dialog(self, message: SIPMessage) -> Optional[SIPDialog]:
-        """Encontra diálogo correspondente a uma mensagem"""
-        call_id = message.headers.get('Call-ID')
-        if not call_id:
-            return None
-            
-        dialog = self.dialogs.get(call_id)
-        if dialog:
-            # Verifica tags
-            from_tag = self._extract_tag(message.headers.get('From', ''))
-            to_tag = self._extract_tag(message.headers.get('To', ''))
-            
-            if dialog.local_tag == from_tag and dialog.remote_tag == to_tag:
-                return dialog
-                
-        return None
-
-    @staticmethod
-    def _extract_tag(header: str) -> Optional[str]:
-        """Extrai tag de um header"""
-        match = re.search(r'tag=([^;>\s]+)', header)
-        return match.group(1) if match else None
-
-class EventManager:
-    """Gerenciador de eventos"""
-
-    def __init__(self):
-        self.handlers: Dict[str, Set[Callable]] = {
-            # Eventos SIP
-            'on_register_success': set(),
-            'on_register_failure': set(),
-            'on_invite_received': set(),
-            'on_invite_success': set(),
-            'on_invite_failure': set(),
-            'on_bye_received': set(),
-            'on_bye_success': set(),
-            'on_cancel_received': set(),
-            'on_message_received': set(),
-            'on_message_success': set(),
-            'on_info_received': set(),
-            'on_info_success': set(),
-            
-            # Eventos de diálogo
-            'on_dialog_established': set(),
-            'on_dialog_terminated': set(),
-            
-            # Eventos de mídia
-            'on_media_established': set(),
-            'on_media_terminated': set(),
-            'on_dtmf_received': set(),
-            'on_dtmf_sent': set(),
-            
-            # Eventos de erro
-            'on_transport_error': set(),
-            'on_media_error': set(),
-            'on_general_error': set()
-        }
-        self.logger = logger
-
-    def add_handler(self, event: str, handler: Callable) -> None:
-        """Adiciona handler para evento"""
-        if event in self.handlers:
-            self.handlers[event].add(handler)
-        else:
-            raise ValueError(f"Unknown event type: {event}")
-
-    def remove_handler(self, event: str, handler: Callable) -> None:
-        """Remove handler de evento"""
-        if event in self.handlers and handler in self.handlers[event]:
-            self.handlers[event].remove(handler)
-
-    async def trigger_event(self, event: str, *args, **kwargs) -> None:
-        """Dispara evento"""
-        if event in self.handlers:
-            for handler in self.handlers[event]:
-                try:
-                    if asyncio.iscoroutinefunction(handler):
-                        await handler(*args, **kwargs)
-                    else:
-                        handler(*args, **kwargs)
-                except Exception as e:
-                    self.logger.error(f"Error in event handler {event}: {e}")
-                    await self.trigger_event('on_general_error', e)
-                    
-                    
-class AsyncSIPManager:
-    """Gerenciador principal SIP assíncrono"""
-
-    def __init__(self, config: SIPConfig, auth: Optional[AuthCredentials] = None):
-        self.config = config
-        self.auth = auth
-        self.transport_manager = TransportManager(config.network)
-        self.dialog_manager = DialogManager()
-        self.sdp_manager = SDPManager(config.media)
-        self.dtmf_manager = DTMFManager(config.media.dtmf_mode)
-        self.event_manager = EventManager()
-        self.running = False
-        self.registered = False
-        self.logger = logger
-
-    async def start(self) -> None:
-        """Inicia o gerenciador SIP"""
-        try:
-            self.running = True
-            await self.transport_manager.start(self._handle_incoming_message)
-            await self._start_keep_alive()
-            self.logger.info("SIP Manager started successfully")
-        except Exception as e:
-            self.logger.error(f"Failed to start SIP Manager: {e}")
-            await self.stop()
-            raise
-
-    async def stop(self) -> None:
-        """Para o gerenciador SIP"""
-        try:
-            self.running = False
-            await self.transport_manager.stop()
-            # Termina todos os diálogos ativos
-            for dialog_id in list(self.dialog_manager.dialogs.keys()):
-                await self.dialog_manager.terminate_dialog(dialog_id)
-            self.logger.info("SIP Manager stopped")
-        except Exception as e:
-            self.logger.error(f"Error stopping SIP Manager: {e}")
-            raise
-
-    async def register(self, force: bool = False) -> None:
-        """Realiza registro SIP"""
-        try:
-            if not self.auth:
-                raise AuthenticationError("Authentication required for registration")
-
-            transaction = SIPTransaction(
-                method=SIPMethod.REGISTER,
-                branch=generate_branch()
-            )
-
-            headers = {
-                "Via": f"SIP/2.0/{self.config.network.transport.value} "
-                      f"{self.config.network.local_ip}:{self.config.network.local_port};"
-                      f"branch={transaction.branch}",
-                "From": f"<sip:{self.auth.username}@{self.config.network.remote_ip}>"
-                       f";tag={generate_tag()}",
-                "To": f"<sip:{self.auth.username}@{self.config.network.remote_ip}>",
-                "Call-ID": generate_call_id(),
-                "CSeq": "1 REGISTER",
-                "Contact": f"<sip:{self.auth.username}@{self.config.network.local_ip}:"
-                         f"{self.config.network.local_port}>",
-                "Expires": str(self.config.registration_interval),
-                "Max-Forwards": "70",
-                "User-Agent": self.config.user_agent
-            }
-
-            request = SIPMessage.build_request(
-                method=SIPMethod.REGISTER,
-                uri=f"sip:{self.config.network.remote_ip}",
-                headers=headers
-            )
-
-            # Configura callbacks da transação
-            transaction.add_callback('on_completed', self._handle_register_response)
-            transaction.add_callback('on_error', self._handle_register_error)
-
-            await self._send_request(request, transaction)
-            self.logger.info("Sent REGISTER request")
-
-        except Exception as e:
-            self.logger.error(f"Registration error: {e}")
-            await self.event_manager.trigger_event('on_register_failure', str(e))
-            raise
-
-    async def invite(self, to_uri: str) -> str:
-        """Inicia uma chamada"""
-        try:
-            call_id = generate_call_id()
-            dialog = self.dialog_manager.create_dialog(
-                call_id=call_id,
-                local_tag=generate_tag()
-            )
-
-            transaction = SIPTransaction(
-                method=SIPMethod.INVITE,
-                branch=generate_branch()
-            )
-
-            # Cria oferta SDP
-            media_port = self._allocate_media_port()
-            sdp_offer = self.sdp_manager.create_offer(
-                self.config.network.local_ip,
-                media_port
-            )
-
-            headers = {
-                "Via": f"SIP/2.0/{self.config.network.transport.value} "
-                      f"{self.config.network.local_ip}:{self.config.network.local_port};"
-                      f"branch={transaction.branch}",
-                "From": f"<sip:{self.auth.username}@{self.config.network.remote_ip}>"
-                       f";tag={dialog.local_tag}",
-                "To": f"<{to_uri}>",
-                "Call-ID": call_id,
-                "CSeq": f"{dialog.local_seq} INVITE",
-                "Contact": f"<sip:{self.auth.username}@{self.config.network.local_ip}:"
-                         f"{self.config.network.local_port}>",
-                "Content-Type": "application/sdp"
-            }
-
-            request = SIPMessage.build_request(
-                method=SIPMethod.INVITE,
-                uri=to_uri,
-                headers=headers,
-                body=sdp_offer
-            )
-
-            # Configura callbacks
-            transaction.add_callback('on_proceeding', self._handle_invite_proceeding)
-            transaction.add_callback('on_completed', self._handle_invite_completed)
-            transaction.add_callback('on_error', self._handle_invite_error)
-
-            dialog.add_transaction(transaction)
-            await self._send_request(request, transaction)
-            
-            self.logger.info(f"Sent INVITE request for dialog {call_id}")
-            return call_id
-
-        except Exception as e:
-            self.logger.error(f"Error sending INVITE: {e}")
-            await self.event_manager.trigger_event('on_invite_failure', str(e))
-            raise
-
-    async def send_dtmf(self, dialog_id: str, digit: str) -> None:
-        """Envia DTMF"""
-        try:
-            dialog = self.dialog_manager.get_dialog(dialog_id)
-            if not dialog:
-                raise DialogError(f"No dialog found with ID: {dialog_id}")
-
-            await self.dtmf_manager.send_dtmf(digit)
-            
-        except Exception as e:
-            self.logger.error(f"Error sending DTMF: {e}")
-            await self.event_manager.trigger_event('on_general_error', str(e))
-            raise
-
-    async def terminate_dialog(self, dialog_id: str) -> None:
-        """Termina um diálogo"""
-        try:
-            dialog = self.dialog_manager.get_dialog(dialog_id)
-            if not dialog:
-                raise DialogError(f"No dialog found with ID: {dialog_id}")
-
-            # Envia BYE
-            transaction = SIPTransaction(
-                method=SIPMethod.BYE,
-                branch=generate_branch()
-            )
-
-            headers = {
-                "Via": f"SIP/2.0/{self.config.network.transport.value} "
-                      f"{self.config.network.local_ip}:{self.config.network.local_port};"
-                      f"branch={transaction.branch}",
-                "From": f"<sip:{self.auth.username}@{self.config.network.remote_ip}>"
-                       f";tag={dialog.local_tag}",
-                "To": f"<{dialog.remote_uri}>;tag={dialog.remote_tag}",
-                "Call-ID": dialog.call_id,
-                "CSeq": f"{dialog.local_seq} BYE"
-            }
-
-            request = SIPMessage.build_request(
-                method=SIPMethod.BYE,
-                uri=dialog.remote_target,
-                headers=headers
-            )
-
-            transaction.add_callback('on_completed', self._handle_bye_response)
-            dialog.add_transaction(transaction)
-            await self._send_request(request, transaction)
-
-        except Exception as e:
-            self.logger.error(f"Error terminating dialog: {e}")
-            await self.event_manager.trigger_event('on_general_error', str(e))
-            raise
-
-    async def _handle_incoming_message(self, message: str, addr: tuple) -> None:
-        """Manipula mensagens recebidas"""
-        try:
-            parsed_message = SIPMessage.parse_message(message)
-            
-            if parsed_message.is_request:
-                await self._handle_request(parsed_message, addr)
-            else:
-                await self._handle_response(parsed_message, addr)
-                
-        except Exception as e:
-            self.logger.error(f"Error handling incoming message: {e}")
-            await self.event_manager.trigger_event('on_general_error', str(e))
-
-    async def _handle_request(self, message: SIPMessage, addr: tuple) -> None:
-        """Manipula requisições recebidas"""
-        try:
-            method = message.method
-            if method == SIPMethod.INVITE:
-                await self._handle_incoming_invite(message, addr)
-            elif method == SIPMethod.BYE:
-                await self._handle_incoming_bye(message, addr)
-            elif method == SIPMethod.INFO:
-                await self._handle_incoming_info(message, addr)
-            else:
-                # Método não suportado
-                await self._send_response(
-                    message, 405, "Method Not Allowed", addr
-                )
-                
-        except Exception as e:
-            self.logger.error(f"Error handling request: {e}")
-            await self._send_response(
-                message, 500, "Internal Server Error", addr
-            )
-
-    # Implementação dos handlers de resposta
-    async def _handle_register_response(self, transaction: SIPTransaction) -> None:
-        """Manipula resposta de REGISTER"""
-        response = transaction.responses[-1]
-        if 200 <= response.status_code < 300:
-            self.registered = True
-            await self.event_manager.trigger_event('on_register_success')
-        else:
-            await self.event_manager.trigger_event(
-                'on_register_failure',
-                response.status_code
-            )
-
-    async def _handle_invite_proceeding(self, transaction: SIPTransaction) -> None:
-        """Manipula resposta provisória de INVITE"""
-        response = transaction.responses[-1]
-        await self.event_manager.trigger_event(
-            'on_invite_progress',
-            response.status_code
+    @classmethod
+    def unpack(cls, packet: bytes):
+        header = struct.unpack("!BBHII", packet[:12])
+        payload = packet[12:]
+        return cls(
+            payload_type=header[1] & 0x7F,
+            sequence_number=header[2],
+            timestamp=header[3],
+            ssrc=header[4],
+            payload=payload
         )
 
-    async def _handle_invite_completed(self, transaction: SIPTransaction) -> None:
-        """Manipula resposta final de INVITE"""
-        response = transaction.responses[-1]
-        if 200 <= response.status_code < 300:
-            # Processa SDP da resposta
-            if response.body:
-                sdp = self.sdp_manager.parse_sdp(response.body)
-                # Configura mídia com base no SDP
-                # (implementação depende do RTP)
-            
-            await self.event_manager.trigger_event('on_invite_success')
-        else:
-            await self.event_manager.trigger_event(
-                'on_invite_failure',
-                response.status_code
-            )
+class RTPHandler:
+    def __init__(self):
+        self.streams: Dict[str, RTPStream] = {}
 
-    # Métodos auxiliares
-    def _allocate_media_port(self) -> int:
-        """Aloca porta para mídia"""
-        # Implementação simplificada - deve ser melhorada
-        return self.config.media.rtp_port_range[0]
+    def start_stream(self, call_id: str, local_ip: str, remote_port: int, remote_ip: str, local_port: int = 0):
+        stream = RTPStream(local_ip, local_port, remote_ip, remote_port)
+        actual_port = stream.socket.getsockname()[1]
+        self.streams[call_id] = stream
+        stream.start()
+        return actual_port
 
-    async def _start_keep_alive(self) -> None:
-        """Inicia keep-alive"""
+    def close_stream(self, call_id: str):
+        if call_id in self.streams:
+            self.streams[call_id].stop()
+            del self.streams[call_id]
+
+    def send_audio(self, call_id: str, audio_data: bytes):
+        if call_id in self.streams:
+            self.streams[call_id].send_packet(audio_data)
+
+class RTPStream:
+    def __init__(self, local_ip: str, local_port: int, remote_ip: str, remote_port: int):
+        self.local_ip = local_ip
+        self.local_port = local_port
+        self.remote_ip = remote_ip
+        self.remote_port = remote_port
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind((local_ip, local_port))
+        self.sequence_number = 0
+        self.timestamp = 0
+        self.ssrc = struct.unpack("!I", os.urandom(4))[0]
+        self.running = False
+        self.receive_thread = None
+
+    def start(self):
+        self.running = True
+        self.receive_thread = threading.Thread(target=self._receive_packets)
+        self.receive_thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.receive_thread:
+            self.receive_thread.join()
+        self.socket.close()
+
+    def send_packet(self, payload: bytes, payload_type: int = 0):
+        packet = RTPPacket(payload_type, self.sequence_number, self.timestamp, self.ssrc, payload)
+        self.socket.sendto(packet.pack(), (self.remote_ip, self.remote_port))
+        self.sequence_number = (self.sequence_number + 1) & 0xFFFF
+        self.timestamp += len(payload)
+
+    def _receive_packets(self):
         while self.running:
             try:
-                if self.registered:
-                    # Envia OPTIONS como keep-alive
-                    await self._send_options()
-                await asyncio.sleep(self.config.keep_alive_interval)
-            except Exception as e:
-                self.logger.error(f"Keep-alive error: {e}")
-                await asyncio.sleep(1)
+                data, addr = self.socket.recvfrom(2048)
+                packet = RTPPacket.unpack(data)
+                # Process received packet (e.g., play audio)
+                print(f"Received RTP packet: seq={packet.sequence_number}, ts={packet.timestamp}")
+            except socket.error:
+                pass
 
-class SIPClient:
-    """Cliente SIP base"""
+class Transport(ABC):
+    @abstractmethod
+    def send(self, data: bytes, address: tuple):
+        pass
 
-    def __init__(self, config: SIPConfig, credentials: AuthCredentials):
-        self.config = config
-        self.credentials = credentials
-        self.sip_manager = AsyncSIPManager(config, credentials)
-        self._setup_handlers()
+    @abstractmethod
+    def receive(self) -> tuple:
+        pass
 
-    def _setup_handlers(self) -> None:
-        """Configura handlers de eventos padrão"""
-        self.sip_manager.event_manager.add_handler(
-            'on_register_success',
-            self.on_registered
-        )
-        self.sip_manager.event_manager.add_handler(
-            'on_invite_received',
-            self.on_invite_received
-        )
-        self.sip_manager.event_manager.add_handler(
-            'on_invite_success',
-            self.on_call_established
-        )
-        self.sip_manager.event_manager.add_handler(
-            'on_dialog_terminated',
-            self.on_call_terminated
-        )
-        self.sip_manager.event_manager.add_handler(
-            'on_dtmf_received',
-            self.on_dtmf_received
-        )
+class UDPTransport(Transport):
+    def __init__(self, local_ip: str, local_port: int):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind((local_ip, local_port))
 
-    async def start(self) -> None:
-        """Inicia o cliente"""
+    def send(self, data: bytes, address: tuple):
+        self.socket.sendto(data, address)
+
+    def receive(self) -> tuple:
+        return self.socket.recvfrom(8192)
+
+class TCPTransport(Transport):
+    def __init__(self, local_ip: str, local_port: int):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.bind((local_ip, local_port))
+        self.socket.listen(5)
+        self.connections = {}
+
+    def send(self, data: bytes, address: tuple):
+        if address not in self.connections:
+            conn = self.socket.accept()[0]
+            self.connections[address] = conn
+        else:
+            conn = self.connections[address]
+        conn.sendall(data)
+
+    def receive(self) -> tuple:
+        conn, addr = self.socket.accept()
+        data = conn.recv(8192)
+        return data, addr
+
+
+class TLSTransport(Transport):
+    def __init__(self, local_ip: str, local_port: int, cert_file: str, key_file: str):
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+        self.socket = context.wrap_socket(socket.socket(socket.AF_INET, socket.SOCK_STREAM), server_side=True)
+        self.socket.bind((local_ip, local_port))
+        self.socket.listen(5)
+        self.connections = {}
+
+    def send(self, data: bytes, address: tuple):
+        if address not in self.connections:
+            conn = self.socket.accept()[0]
+            self.connections[address] = conn
+        else:
+            conn = self.connections[address]
+        conn.sendall(data)
+
+    def receive(self) -> tuple:
+        conn, addr = self.socket.accept()
+        data = conn.recv(8192)
+        return data, addr
+
+
+def sip_request(method: SIPMethod):
+    def decorator(func: Callable):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            log.info(f"Sending SIP {method.value} request")
+            result = func(self, *args, **kwargs)
+            log.info(f"SIP {method.value} request sent")
+            return result
+        return wrapper
+    return decorator
+
+def sip_response(func):
+    def decorator(func: Callable):
+        @functools.wraps(func)
+        def wrapper(self, message: SIPMessage, source: tuple):
+            log.info(f"Handling SIP response: {message.status.code} {message.status.reason}")
+            result = func(self, message, source)
+            log.info("SIP response handled")
+            return result
+        return wrapper
+    return decorator
+
+class SIPStack:
+    def __init__(self, local_ip: str, local_port: int, transport_type: str = "UDP"):
+        self.local_ip = local_ip
+        self.local_port = local_port
+        self.transport = self._create_transport(transport_type)
+        self.dialogs: Dict[str, SIPDialog] = {}
+        self.rtp_handler = RTPHandler()
+
+    def _create_transport(self, transport_type: str) -> Transport:
+        if transport_type == "UDP":
+            return UDPTransport(self.local_ip, self.local_port)
+        elif transport_type == "TCP":
+            return TCPTransport(self.local_ip, self.local_port)
+        elif transport_type == "TLS":
+            return TLSTransport(self.local_ip, self.local_port, "cert.pem", "key.pem")
+        else:
+            raise ValueError("Invalid transport type")
+
+    def send_message(self, message: SIPMessage, destination: tuple):
         try:
-            await self.sip_manager.start()
-            await self.sip_manager.register()
-            self.logger.info("SIP Client started")
+            self.transport.send(message.serialize(), destination)
+            log.info(f"Sent SIP message to {destination}")
         except Exception as e:
-            self.logger.error(f"Error starting client: {e}")
-            raise
+            log.error(f"Failed to send SIP message: {e}")
+            raise SIPException("Message sending failed") from e
 
-    async def stop(self) -> None:
-        """Para o cliente"""
-        await self.sip_manager.stop()
-        self.logger.info("SIP Client stopped")
+    def receive_message(self) -> tuple:
+        try:
+            data, addr = self.transport.receive()
+            log.info(f"Received SIP message from {addr}")
+            return SIPMessage.deserialize(data), addr
+        except Exception as e:
+            log.error(f"Failed to receive SIP message: {e}")
+            raise SIPException("Message receiving failed") from e
 
-    async def make_call(self, to_uri: str) -> str:
-        """Inicia uma chamada"""
-        return await self.sip_manager.invite(to_uri)
+    def create_dialog(self, local_uri: str, remote_uri: str) -> str:
+        call_id = str(uuid.uuid4())
+        dialog = SIPDialog(call_id, local_uri, remote_uri)
+        self.dialogs[call_id] = dialog
+        log.info(f"Created new dialog with Call-ID: {call_id}")
+        return call_id
 
-    async def end_call(self, call_id: str) -> None:
-        """Termina uma chamada"""
-        await self.sip_manager.terminate_dialog(call_id)
+    @sip_request(SIPMethod.INVITE)
+    def invite(self, call_id: str, sdp: SDPMessage):
+        dialog = self.dialogs[call_id]
+        invite_msg = SIPMessage(
+            method=SIPMethod.INVITE,
+            uri=dialog.remote_uri,
+            headers={
+                "Call-ID": call_id,
+                "From": dialog.local_uri,
+                "To": dialog.remote_uri,
+                "CSeq": f"{dialog.local_seq} INVITE",
+                "Content-Type": "application/sdp"
+            },
+            body=str(sdp)
+        )
+        self.send_message(invite_msg, self._get_destination(dialog.remote_uri))
+        dialog.local_seq += 1
 
-    async def send_dtmf(self, call_id: str, digit: str) -> None:
-        """Envia DTMF"""
-        await self.sip_manager.send_dtmf(call_id, digit)
+    @sip_request(SIPMethod.REGISTER)
+    def register(self, user_uri: str, registrar_uri: str, expires: int = 3600):
+        call_id = str(uuid.uuid4())
+        register_msg = SIPMessage(
+            method=SIPMethod.REGISTER,
+            uri=registrar_uri,
+            headers={
+                "Call-ID": call_id,
+                "From": user_uri,
+                "To": user_uri,
+                "CSeq": "1 REGISTER",
+                "Expires": str(expires)
+            }
+        )
+        self.send_message(register_msg, self._get_destination(registrar_uri))
 
-    # Callbacks que podem ser sobrescritos
-    async def on_registered(self) -> None:
-        """Chamado quando registrado com sucesso"""
-        self.logger.info("Successfully registered")
+    @sip_request(SIPMethod.OPTIONS)
+    def options(self, target_uri: str):
+        call_id = str(uuid.uuid4())
+        options_msg = SIPMessage(
+            method=SIPMethod.OPTIONS,
+            uri=target_uri,
+            headers={
+                "Call-ID": call_id,
+                "From": f"<sip:{self.local_ip}>",
+                "To": target_uri,
+                "CSeq": "1 OPTIONS"
+            }
+        )
+        self.send_message(options_msg, self._get_destination(target_uri))
 
-    async def on_invite_received(self, dialog_id: str, remote_uri: str) -> None:
-        """Chamado quando recebe INVITE"""
-        self.logger.info(f"Received call from {remote_uri}")
+    def start_keep_alive(self, interval: int = 30):
+        self.keep_alive_interval = interval
+        self.keep_alive_thread = threading.Thread(target=self._keep_alive_loop)
+        self.keep_alive_thread.daemon = True
+        self.keep_alive_thread.start()
+        
+    def _keep_alive_loop(self):
+        while True:
+            for dialog in self.dialogs.values():
+                if dialog.state == "ESTABLISHED":
+                    self._send_keep_alive(dialog)
+            time.sleep(self.keep_alive_interval)
 
-    async def on_call_established(self, dialog_id: str) -> None:
-        """Chamado quando chamada é estabelecida"""
-        self.logger.info(f"Call established: {dialog_id}")
+    def _send_keep_alive(self, dialog: SIPDialog):
+        options_msg = SIPMessage(
+            method=SIPMethod.OPTIONS,
+            uri=dialog.remote_uri,
+            headers={
+                "Call-ID": dialog.call_id,
+                "From": dialog.local_uri,
+                "To": dialog.remote_uri,
+                "CSeq": f"{dialog.local_seq} OPTIONS"
+            }
+        )
+        self.send_message(options_msg, self._get_destination(dialog.remote_uri))
+        dialog.local_seq += 1
+    
+    def _get_destination(self, uri: str) -> tuple:
+        try:
+            ip = uri.split("@")[1].split(":")[0]
+            port = 5060  # Default SIP port
+            return (ip, port)
+        except IndexError:
+            log.error(f"Invalid URI format: {uri}")
+            raise SIPException("Invalid URI format")
 
-    async def on_call_terminated(self, dialog_id: str) -> None:
-        """Chamado quando chamada é terminada"""
-        self.logger.info(f"Call terminated: {dialog_id}")
+    def handle_incoming_message(self, message: SIPMessage, source: tuple):
+        try:
+            if message.method == SIPMethod.INVITE:
+                self._handle_invite(message, source)
+            elif message.method == SIPMethod.BYE:
+                self._handle_bye(message, source)
+            elif message.method == SIPMethod.ACK:
+                self._handle_ack(message, source)
+            elif message.status:
+                self._handle_response(message, source)
+            else:
+                log.warning(f"Unhandled SIP method: {message.method}")
+        except Exception as e:
+            log.error(f"Error handling incoming message: {e}")
 
-    async def on_dtmf_received(self, dialog_id: str, digit: str) -> None:
-        """Chamado quando recebe DTMF"""
-        self.logger.info(f"Received DTMF {digit} in call {dialog_id}")
+    def _handle_invite(self, message: SIPMessage, source: tuple):
+        call_id = message.headers["Call-ID"]
+        if call_id not in self.dialogs:
+            dialog = SIPDialog(call_id, message.headers["To"], message.headers["From"])
+            self.dialogs[call_id] = dialog
+        else:
+            dialog = self.dialogs[call_id]
+        
+        dialog.update_state("RINGING")
+        ringing_response = SIPMessage(
+            status_code=180,
+            reason="Ringing",
+            headers={
+                "Call-ID": call_id,
+                "From": dialog.remote_uri,
+                "To": dialog.local_uri,
+                "CSeq": message.headers["CSeq"]
+            }
+        )
+        self.send_message(ringing_response, source)
+
+        # Auto-answer for demonstration purposes
+        sdp = SDPMessage.parse(message.body)
+        remote_rtp_port = sdp.media[0].port
+        local_rtp_port = self.rtp_handler.start_stream(call_id, self.local_ip, remote_rtp_port, source[0], 0)
+        
+        answer_sdp = SDPMessage(
+            origin=f"- {uuid.uuid4()} 1 IN IP4 {self.local_ip}",
+            session_name="PyPhone Call",
+            connection=f"IN IP4 {self.local_ip}",
+            media=[f"audio {local_rtp_port} RTP/AVP 0"]
+        )
+        ok_response = SIPMessage(
+            status_code=200,
+            reason="OK",
+            headers={
+                "Call-ID": call_id,
+                "From": dialog.remote_uri,
+                "To": dialog.local_uri,
+                "CSeq": message.headers["CSeq"],
+                "Content-Type": "application/sdp"
+            },
+            body=str(answer_sdp)
+        )
+        self.send_message(ok_response, source)
+        dialog.update_state("ESTABLISHED")
+
+    def _handle_bye(self, message: SIPMessage, source: tuple):
+        call_id = message.headers["Call-ID"]
+        if call_id in self.dialogs:
+            dialog = self.dialogs[call_id]
+            dialog.update_state("TERMINATED")
+            del self.dialogs[call_id]
+            self.rtp_handler.close_stream(call_id)
+            ok_response = SIPMessage(
+                status_code=200,
+                reason="OK",
+                headers={
+                    "Call-ID": call_id,
+                    "From": dialog.remote_uri,
+                    "To": dialog.local_uri,
+                    "CSeq": message.headers["CSeq"]
+                }
+            )
+            self.send_message(ok_response, source)
+
+    def _handle_ack(self, message: SIPMessage, source: tuple):
+        call_id = message.headers["Call-ID"]
+        if call_id in self.dialogs:
+            dialog = self.dialogs[call_id]
+            dialog.update_state("CONFIRMED")
+        else:
+            log.warning(f"Received ACK for non-existent dialog: {call_id}")
+
+    @sip_response
+    def _handle_response(self, message: SIPMessage, source: tuple):
+        call_id = message.headers["Call-ID"]
+        if call_id in self.dialogs:
+            dialog = self.dialogs[call_id]
+            if message.status == SIPStatusCode.OK:
+                dialog.update_state("ESTABLISHED")
+                if 'INVITE' in message.headers["CSeq"]:
+                    sdp = SDPMessage.parse(message.body)
+                    remote_rtp_port = sdp.media[0].port
+                    self.rtp_handler.start_stream(call_id, self.local_ip, remote_rtp_port, source[0], 0)
+                elif 'OPTIONS' in message.headers["CSeq"]:
+                    self.options(dialog.remote_uri)
+                    log.info(f"Sent OPTIONS request to {dialog.remote_uri}")
+                elif 'REGISTER' in message.headers["CSeq"]:
+                    log.info(f"Registered successfully with registrar {dialog.remote_uri}")
+            elif message.status == SIPStatusCode.REQUEST_TIMEOUT:
+                dialog.update_state("TERMINATED")
+                del self.dialogs[call_id]
+                self.rtp_handler.close_stream(call_id)
+        else:
+            log.warning(f"Received response for non-existent dialog: {call_id}")
+    
+    def run(self):
+        while True:
+            try:
+                message, source = self.receive_message()
+                self.handle_incoming_message(message, source)
+            except Exception as e:
+                log.error(f"Error in SIP stack: {e}")
+
+class CustomSIPClient(SIPStack):
+    def __init__(self, local_ip: str, local_port: int, transport_type: str = "UDP"):
+        super().__init__(local_ip, local_port, transport_type)
+        self.user_agent = "CustomSIPClient/1.0"
+
+    def custom_invite(self, target_uri: str, sdp: SDPMessage):
+        call_id = self.create_dialog(f"<sip:{self.local_ip}>", target_uri)
+        invite_msg = SIPMessage(
+            method=SIPMethod.INVITE,
+            uri=target_uri,
+            headers={
+                "Call-ID": call_id,
+                "From": f"<sip:{self.local_ip}>",
+                "To": target_uri,
+                "CSeq": "1 INVITE",
+                "User-Agent": self.user_agent,
+                "Content-Type": "application/sdp"
+            },
+            body=str(sdp)
+        )
+        self.send_message(invite_msg, self._get_destination(target_uri))
+        log.info(f"Sent custom INVITE to {target_uri}")
+        return call_id
+
+    def custom_bye(self, call_id: str):
+        dialog = self.dialogs.get(call_id)
+        if dialog:
+            bye_msg = SIPMessage(
+                method=SIPMethod.BYE,
+                uri=dialog.remote_uri,
+                headers={
+                    "Call-ID": call_id,
+                    "From": dialog.local_uri,
+                    "To": dialog.remote_uri,
+                    "CSeq": f"{dialog.local_seq} BYE",
+                    "User-Agent": self.user_agent
+                }
+            )
+            self.send_message(bye_msg, self._get_destination(dialog.remote_uri))
+            log.info(f"Sent custom BYE for call {call_id}")
+        else:
+            log.warning(f"Attempted to send BYE for non-existent dialog: {call_id}")
+
+    def custom_message(self, target_uri: str, content: str, content_type: str = "text/plain"):
+        call_id = str(uuid.uuid4())
+        message_msg = SIPMessage(
+            method=SIPMethod.MESSAGE,
+            uri=target_uri,
+            headers={
+                "Call-ID": call_id,
+                "From": f"<sip:{self.local_ip}>",
+                "To": target_uri,
+                "CSeq": "1 MESSAGE",
+                "User-Agent": self.user_agent,
+                "Content-Type": content_type
+            },
+            body=content
+        )
+        self.send_message(message_msg, self._get_destination(target_uri))
+        log.info(f"Sent custom MESSAGE to {target_uri}")
+
+    def handle_incoming_message(self, message: SIPMessage, source: tuple):
+        super().handle_incoming_message(message, source)
+        if message.method == SIPMethod.MESSAGE:
+            self._handle_message(message, source)
+
+    def _handle_message(self, message: SIPMessage, source: tuple):
+        log.info(f"Received MESSAGE from {source}: {message.body}")
+        ok_response = SIPMessage(
+            status_code=200,
+            reason="OK",
+            headers={
+                "Call-ID": message.headers["Call-ID"],
+                "From": message.headers["To"],
+                "To": message.headers["From"],
+                "CSeq": message.headers["CSeq"]
+            }
+        )
+        self.send_message(ok_response, source)
 
 
+
+async def main():
+    client = CustomSIPClient("192.168.1.100", 5060)
+    
+    # Registrar o cliente em um servidor SIP
+    client.register("sip:user@example.com", "sip:registrar.example.com")
+    
+    # Iniciar uma chamada
+    sdp = SDPMessage(
+        origin=f"- {uuid.uuid4()} 1 IN IP4 192.168.1.100",
+        session_name="PyPhone Call",
+        connection="IN IP4 192.168.1.100",
+        media=["audio 10000 RTP/AVP 0"]
+    )
+    call_id = client.custom_invite("sip:bob@example.com", sdp)
+    
+    # Enviar uma mensagem de texto
+    client.custom_message("sip:alice@example.com", "Olá, Alice!")
+    
+    # Encerrar a chamada após 30 segundos
+    await asyncio.sleep(30)
+    client.custom_bye(call_id)
+    
+    # Executar o cliente SIP
+    await asyncio.get_event_loop().run_in_executor(None, client.run)
+
+if __name__ == "__main__":
+    asyncio.run(main())
