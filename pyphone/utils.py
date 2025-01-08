@@ -178,7 +178,7 @@ class ProtocolType(Enum):
 
 
 
-class SIPMessageType(Enum):
+class SIPMethod(Enum):
     REGISTER = auto()
     INVITE = auto()
     INFO = auto()

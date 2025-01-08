@@ -1,48 +1,19 @@
-"""
-RFC 4566: SDP (Session Description Protocol)
-O SDP é usado para descrever sessões multimídia, incluindo detalhes como tipo de mídia (áudio, vídeo), formato, endereço IP e portas de transporte. Ele não é um protocolo de transporte, mas um formato utilizado em protocolos como SIP para negociar parâmetros de sessão. Exemplos incluem campos obrigatórios como v= (versão), o= (origem), s= (nome da sessão) e m= (descrição da mídia
-"""
-
-from uuid import uuid4
+import re
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Union, Dict
-from abc import ABC
-
-from rich.panel import Panel
-from rich.pretty import Pretty
-from rich.console import Console, ConsoleOptions, RenderResult
-from pyphone.utils import log, console, EOL
+from typing import List
+from uuid import uuid4
 
 
-__all__ = [
-    'MediaType',
-    'CodecType',
-    'DtmfPayloadType',
-    'MediaSessionType',
-    'MediaProtocolType',
-    'SDPField',
-    'Owner',
-    'Atribute',
-    'ConnectionInformation',
-    'MediaDescription',
-    'SessionName',
-    'MediaSession',
-    'Ptime',
-    'SDPConfig',
-    'SDPBody'
-]
-
-
-
+# SDP Body RFC: 
 
 class MediaType(Enum):
     AUDIO = 'audio'
     VIDEO = 'video'
     MESSAGE = 'message'
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return str(self._value_)
 
 
@@ -62,7 +33,7 @@ class CodecType(Enum):
     def codecs(cls) -> List[str]:
         return [codec for codec in cls]
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return f'{self.code} {self.description}/{self.rate}'
 
 
@@ -77,9 +48,8 @@ class DtmfPayloadType(Enum):
         obj.fmtp = fmtp
         return obj
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return f'{self.code} {self.description}/{self.rate}'
-
 
 
 class MediaSessionType(Enum):
@@ -88,30 +58,42 @@ class MediaSessionType(Enum):
     RECVONLY = 'recvonly'
     INACTIVE = 'inactive'
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return str(self._value_)
 
-    def __repr__(self) -> str:
-        return self.__str__()
 
 class MediaProtocolType(Enum):
     RTP_AVP = 'RTP/AVP'
     RTCP = 'RTCP'
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return str(self._value_)
 
 
-class SDPField(ABC):
-    def __init__(self, key: str, value: str):
-        self.key = key.lower()
-        self.value = str(value)
-        
-    def __str__(self) -> str:
-        return f'{self.key}={self.value}'
+class Body(str):
+    _SYNTAX = re.compile('^(?P<name>[a-z]+)=[\ \t]*(?P<value>.*)$')
+
+    def __init__(self, name: str, value: str):
+        self.name = name
+        self.value = value
+    
+    def __str__(self):
+        return f"{self.name}={self.value}"
+
+    @classmethod
+    def parser(cls, body: str) -> 'Body':
+        _match = cls._SYNTAX.match(body)
+        if not _match:
+            raise ValueError(f"Invalid Body: {body}")
+        return Body(
+            name=_match.group('name'),
+            value=_match.group('value')
+        )
 
 
-class Owner(SDPField):
+class Owner(Body):
+    _SYNTAX = re.compile('^(?P<name>[a-z]+)=(?P<username>[a-zA-Z0-9\-\.\_]+)[\ \t]+(?P<session_id>[a-zA-Z0-9]+)[\ \t]+(?P<session_version>[a-zA-Z0-9]+)[\ \t]+(?P<network_type>[a-zA-Z0-9]+)[\ \t]+(?P<address_type>[a-zA-Z0-9]+)[\ \t]+(?P<address>[a-zA-Z0-9\.\:]+)$')
+    
     def __init__(
         self,
         username: str = '-',
@@ -137,15 +119,30 @@ class Owner(SDPField):
     def _generate_session_id(self) -> str:
         return uuid4().hex[:5]
 
+    @classmethod
+    def parser(cls, owner: str) -> 'Owner':
+        _match = cls._SYNTAX.match(owner)
+        if not _match:
+            raise ValueError(f"Invalid Owner: {owner}")
+        return Owner(
+            username=_match.group('username'),
+            session_id=_match.group('session_id'),
+            session_version=_match.group('session_version'),
+            network_type=_match.group('network_type'),
+            address_type=_match.group('address_type'),
+            address=_match.group('address')
+        )
 
-class Atribute(SDPField):
+class Atribute(Body):
     def __init__(self, key: str, value: str):
         self.key = key
         self.value = value
         super().__init__(self.key, self.value)
 
 
-class ConnectionInformation(SDPField):
+class ConnectionInformation(Body):
+    _SYNTAX = re.compile('^(?P<name>[a-z]+)=(?P<network_type>[a-zA-Z0-9]+)[\ \t]+(?P<address_type>[a-zA-Z0-9]+)[\ \t]+(?P<address>[a-zA-Z0-9\.\:]+)$')
+    
     def __init__(
         self,
         network_type: str = 'IN',
@@ -160,8 +157,21 @@ class ConnectionInformation(SDPField):
             f'{self.network_type} {self.address_type} {self.address}'
         )
 
+    @classmethod
+    def parser(cls, connection: str) -> 'ConnectionInformation':
+        _match = cls._SYNTAX.match(connection)
+        if not _match:
+            raise ValueError(f"Invalid Connection Information: {connection}")
+        return ConnectionInformation(
+            network_type=_match.group('network_type'),
+            address_type=_match.group('address_type'),
+            address=_match.group('address')
+        )
 
-class MediaDescription(SDPField):
+
+class MediaDescription(Body):
+    _SYNTAX = re.compile('^(?P<name>[a-z]+)=(?P<media_type>[a-zA-Z0-9]+)[\ \t]+(?P<port>[\d]+)[\ \t]+(?P<protocol>[a-zA-Z0-9]+)[\ \t]+(?P<codec>[a-zA-Z0-9\ \t]+)[\ \t]+(?P<dtmf_payload>[a-zA-Z0-9]+)$')
+    
     def __init__(
         self,
         port: int = None,
@@ -184,27 +194,40 @@ class MediaDescription(SDPField):
     def _generate_port(self) -> int:
         return random.randint(10000, 20000)
 
+    @classmethod
+    def parser(cls, media: str) -> 'MediaDescription':
+        _match = cls._SYNTAX.match(media)
+        if not _match:
+            raise ValueError(f"Invalid Media Description: {media}")
+        _codecs = [CodecType(code) for code in _match.group('codec').split(' ')]
+        return MediaDescription(
+            media_type=_match.group('media_type'),
+            port=int(_match.group('port')),
+            protocol=_match.group('protocol'),
+            codecs=_codecs,
+            dtmf_payload=_match.group('dtmf_payload')
+        )
 
-class SessionName(SDPField):
+class SessionName(Body):
     def __init__(self, name: str = 'SDP Session'):
         self.name = name
         super().__init__('s', name)
 
 
-class MediaSession(SDPField):
+class MediaSession(Body):
     def __init__(self, session_type: MediaSessionType = MediaSessionType.SENDRECV):
         self.session_type = session_type
         super().__init__('a', str(self.session_type))
 
 
-class Ptime(SDPField):
+class Ptime(Body):
     def __init__(self, ptime: int = 20):
         self.ptime = ptime
         super().__init__('a', f'ptime:{self.ptime}')
 
 
 @dataclass
-class SDPConfig:
+class BodyFactory:
     owner: Owner = field(default_factory=Owner)
     connection_information: ConnectionInformation = field(default_factory=ConnectionInformation)
     media_description: MediaDescription = field(default_factory=MediaDescription)
@@ -212,111 +235,41 @@ class SDPConfig:
     media_session_type: MediaSession = field(default_factory=MediaSession)
     ptime: Ptime = field(default_factory=Ptime)
     attributes: List[Atribute] = field(default_factory=list)
-    extras_fields: List[SDPField] = field(default_factory=list)
+    extras_fields: List[Body] = field(default_factory=list)
 
-
-class SDPBody:
-    MULTI_SDP = ('t', 'r', 'a', 'm')
-    COMPACT_SDP = {
-        'v': 'version',
-        'o': 'origin',
-        's': 'session_name',
-        'i': 'session_information',
-        'u': 'uri',
-        'e': 'email_address',
-        'p': 'phone_number',
-        'z': 'time_zone_adjustment',
-        't': 'session_time',
-        'r': 'repeat_time',
-        'm': 'media_information',
-        'c': 'connection_infomation',
-        'b': 'bandwidth_information',
-        'k': 'encryption_key',
-        'a': 'media_attributes'
-    }
-    _sdp = {}
-    def __init__(
-        self,
-        *fields: Union[List[SDPField], Dict[str, Union[SDPField, List[SDPField]]]],
-        config: SDPConfig = None
-        ):
-        self.config = config
-    
-    
-    def set_config(self, config: SDPConfig):
-        self.config = config
-        if self.config.owner:
-            self['o'] = self.config.owner
-        if self.config.connection_information:
-            self['c'] = self.config.connection_information
-        if self.config.media_description:
-            self['m'] = self.config.media_description
-        if self.config.session_name:
-            self['s'] = self.config.session_name
-        if self.config.media_session_type:
-            self['a'] = self.config.media_session_type
-        if self.config.ptime:
-            self['a'] = self.config.ptime
-        if self.config.attributes:
-            for attribute in self.config.attributes:
-                self['a'] = attribute
-        if self.config.extras_fields:
-            for field in self.config.extras_fields:
-                self[field.key] = field
-    
-    def __getitem__(self, key):
-        return self._sdp[key]
-    
-    def __setitem__(self, key, value):
-        try:
-            key.lower()
-            if key in self.MULTI_SDP:
-                if key not in self._sdp:
-                    self._sdp[key] = []
-                if isinstance(value, (list, tuple)):
-                    self._sdp[key].extend(value)
-                    return
-                self._sdp[key].append(value)
-                return
-            self._sdp[key] = value
-        except Exception:
-            log.error(f"Invalid key {key}")
-    
-    def __delitem__(self, key):
-        del self._sdp[key]
-    
-    def __len__(self):
-        return len(self.__str__())
-
-    def __contains__(self, item):
-        return item in self._sdp
-    
-    def __str__(self):
-        lines = []
-        for _, value in self._sdp.items():
-            if isinstance(value, (list, tuple)):
-                lines.extend([x for x in value])
-                continue
-            lines.append(value)
-        return ''.join([f'{line}{EOL}' for line in lines])
-    
-    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        yield Panel(Pretty(self.summary()), title='SDP (Session Description Protocol)', subtitle=f'{len(self)} bytes')
-    
-    def summary(self) -> str:
-        return self.__str__()
-    
-    @staticmethod
-    def from_string(cls, sdp: str) -> 'SDPBody':
-        sdp_body = cls()
-        for line in sdp.splitlines():
-            key, value = line.split('=', 1)
-            sdp_body[key] = value
-        return sdp_body
-
-
-if __name__ == '__main__':
-    sdp_config = SDPConfig()
-    sdp = SDPBody()
-    sdp.set_config(sdp_config)
-    console.print(sdp)
+    def from_string(self, body: str):
+        lines = body.split('\r\n')
+        attributes = []
+        extras_fields = []
+        for line in lines:
+            name, value = line.split('=')
+            match name:
+                case 'o':
+                    owner = Owner.parser(value)
+                case 'c':
+                    connection_information = ConnectionInformation.parser(value)
+                case 'm':
+                    media_description = MediaDescription.parser(value)
+                case 's':
+                    session_name = SessionName(value)
+                case 'a':
+                    match value:
+                        case 'sendrecv' | 'sendonly' | 'recvonly' | 'inactive':
+                            media_session_type = MediaSession(value)
+                        case 'ptime':
+                            ptime = Ptime(value)
+                        case _:
+                            attributes.append(Atribute(name, value))
+                case _:
+                    extras_fields.append(Body(name, value))
+            
+        return BodyFactory(
+            owner=owner,
+            connection_information=connection_information,
+            media_description=media_description,
+            session_name=session_name,
+            media_session_type=media_session_type,
+            ptime=ptime,
+            attributes=attributes,
+            extras_fields=extras_fields
+        )
