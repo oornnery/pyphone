@@ -194,15 +194,30 @@ class Body:
             value=_match.group('value'),
         )
 
+class Field:
+    pass
+
 
 @dataclass
 class SipHeader:
-    pass
+    via: Header
+    from_: Header
+    to: Header
+    call_id: Header
+    cseq: Header
+    extras_headers: Dict[str, Header] = field(default_factory=dict)
 
 
 @dataclass
 class SdpMedia:
-    pass
+    owner: Body
+    connection_info: Body = None
+    media_description: Body = None
+    session_name: Body = None
+    media_session: Body = None
+    ptime: Body = None
+    attributes: List[Body] = field(default_factory=list)
+    extras_fields: Dict[str, Body] = field(default_factory=dict)
 
 
 class SipMessage(ABC):
@@ -456,6 +471,20 @@ class DtmfHandler(SocketInterface):
         await self._receive_task.cancel()
 
 
+@dataclass
+class UserAgentConfig:
+    username: str
+    server: str
+    port: int = field(default=5060)
+    login: str = field(default=None)
+    password: str = field(default=None)
+    realm: str = field(default=None)
+    proxy: str = field(default=None)
+    user_agent: str = field(default="PyPhone")
+    time_out: int = field(default=30)
+    expires: int = field(default=30)
+
+
 class SipClient:
     transactions: dict[str, SipTransaction] = {}
     dialogs: dict[str, SipDialog] = {}
@@ -467,18 +496,14 @@ class SipClient:
         local_port: int,
         remote_ip: str,
         remote_port: int,
-        username: str,
-        password: str,
-        display_name: str = None,
+        ua_cfg: UserAgentConfig,
         event_loop = None
     ):
         self.local_ip = local_ip
         self.local_port = local_port
         self.remote_ip = remote_ip
         self.remote_port = remote_port
-        self.username = username
-        self.password = password
-        self.display_name = display_name
+        self.ua_cfg = ua_cfg
 
         self.event_loop = event_loop or asyncio.get_event_loop()
         self.sock: SipHandler = SipHandler(local_ip, local_port, self.on_received_message)
