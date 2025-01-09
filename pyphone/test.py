@@ -10,6 +10,7 @@ from enum import Enum, IntEnum
 from dataclasses import dataclass, field
 from typing import List, Dict, Union, Tuple, Optional
 from collections import defaultdict
+from abc import ABC, abstractmethod
 
 
 from pyphone.utils import log
@@ -194,6 +195,16 @@ class Body:
         )
 
 
+@dataclass
+class SipHeader:
+    pass
+
+
+@dataclass
+class SdpMedia:
+    pass
+
+
 class SipMessage(ABC):
     def __init__(self, headers: dict[str, list[Header]] = None, body: dict[str, list[Body]] = None):
         self.headers = headers or defaultdict(list)
@@ -328,9 +339,205 @@ class SipTransaction:
             logging.warning(f"Transaction {self.request.get_header('CSeq')} timed out")
             self.state = "TERMINATED"
     
+    def retransmit_request(self):
+        pass
+    
     def receive_response(self, response: SipResponse):
         self.response = response
         if response.status_code in [SipStatusCode.TRYING, SipStatusCode.RINGING]:
             self.state = "COMPLETED"
             if self.timer:
                 self.timer.cancel()
+        elif response.status_code in [SipStatusCode.OK]:
+            self.state = "TERMINATED"
+            if self.timer:
+                self.timer.cancel()
+        else:
+            self.retransmit += 1
+            if self.retransmit == 7:
+                self.state = "TERMINATED"
+                if self.timer:
+                    self.timer.cancel()
+            else:
+                self.retransmit_request()
+
+
+class SocketInterface(ABC):
+    def __init__(self, ip: str, port: int):
+        self.ip = ip
+        self.port = port
+        self.sock = None
+        self._running = False
+    
+    def _connect(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((self.ip, self.port))
+        self._running = True
+    
+    def _disconnect(self):
+        self._running = False
+        self.sock.close()
+    
+    async def _send(self, data: bytes):
+        if not self.sock:
+            self._connect()
+        await asyncio.get_event_loop().sock_sendto(self.sock, data, (self.ip, self.port))
+    
+    async def _receive(self):
+        while self._running:
+            data, addr = await asyncio.get_event_loop().sock_recv(self.sock, 4096)
+            yield data, addr
+
+
+class SipHandler(SocketInterface):
+    def __init__(self, ip: str, port: int, callback: callable):
+        super().__init__(ip, port)
+        self.callback = callback
+        self._receive_task = None
+    
+    async def send(self, message: SipMessage):
+        await self._send(message.to_bytes())
+    
+    async def receive(self):
+        for data, addr in self._receive():
+            message = SipRequest.parser(data)
+            self.callback(message, addr)
+
+    async def start(self):
+        self._connect()
+        self._receive_task = await asyncio.create_task(self.receive())
+    
+    async def close(self):
+        self._disconnect()
+        await self._receive_task.cancel()
+
+
+class RtpHandler(SocketInterface):
+    def __init__(self, ip: str, port: int, callback: callable):
+        super().__init__(ip, port)
+        self.callback = callback
+        self._receive_task = None
+    
+    async def send(self, data: bytes):
+        await self._send(data)
+    
+    async def receive(self):
+        for data, addr in self._receive():
+            self.callback(data, addr)
+
+    async def start(self):
+        self._connect()
+        self._receive_task = await asyncio.create_task(self.receive())
+    
+    async def close(self):
+        self._disconnect()
+        await self._receive_task.cancel()
+
+
+class DtmfHandler(SocketInterface):
+    def __init__(self, ip, port, callback):
+        super().__init__(ip, port)
+        self.callback = callback
+        self._receive_task = None
+    
+    async def send(self, digit: str):
+        await self._send(digit.encode())
+    
+    async def receive(self):
+        for data, addr in self._receive():
+            self.callback(data, addr)
+    
+    async def start(self):
+        self._connect()
+        self._receive_task = await asyncio.create_task(self.receive())
+    
+    async def close(self):
+        self._disconnect()
+        await self._receive_task.cancel()
+
+
+class SipClient:
+    transactions: dict[str, SipTransaction] = {}
+    dialogs: dict[str, SipDialog] = {}
+    cseq = 0
+    
+    def __init__(
+        self,
+        local_ip: str,
+        local_port: int,
+        remote_ip: str,
+        remote_port: int,
+        username: str,
+        password: str,
+        display_name: str = None,
+        event_loop = None
+    ):
+        self.local_ip = local_ip
+        self.local_port = local_port
+        self.remote_ip = remote_ip
+        self.remote_port = remote_port
+        self.username = username
+        self.password = password
+        self.display_name = display_name
+
+        self.event_loop = event_loop or asyncio.get_event_loop()
+        self.sock: SipHandler = SipHandler(local_ip, local_port, self.on_received_message)
+        self.rtp: RtpHandler = None
+        self.dtmf: DtmfHandler = None
+        self._receive_message_task = None
+    
+    async def start(self):
+        await self.sock.start()
+
+    async def close(self):
+        await self.sock.close()
+        await self._receive_message_task.cancel()
+    
+    async def send_message(self, message: SipMessage):
+        log.info(f"Sending SIP message: {message}")
+        await self.sock.send(message)
+
+    async def on_received_message(self, message: SipMessage, addr: Tuple[str, int]):
+        match message:
+            case isinstance(message, SipRequest):
+                log.info(f"Received SIP request: {message}")
+            case isinstance(message, SipResponse):
+                log.info(f"Received SIP response: {message}")
+            case _:
+                log.error(f"Invalid SIP message: {message}")
+        return None
+    
+    async def send_rtp(self, data: bytes):
+        pass
+    
+    async def on_received_rtp(self, data: bytes):
+        pass
+    
+    async def send_dtmf(self, digit: str):
+        pass
+    
+    async def on_received_dtmf(self, digit: str):
+        pass
+    
+    def create_request(self, method: SipMethod, to_address: Address):
+        self.cseq += 1
+        request = SipRequest(
+            method=method,
+            uri=to_address.uri,
+            headers={
+                'CSeq': [Header('CSeq', f"{self.cseq} {method}")]
+            }
+        )
+        return request
+    
+    def create_response(self, request: SipRequest, status_code: SipStatusCode):
+        response = SipResponse(
+            status_code=status_code,
+            headers={
+                'CSeq': [Header('CSeq', f"{request.get_header('CSeq').value} {request.method}")]
+            }
+        )
+        return response
+
+if __name__ == '__main__':
+    pass
