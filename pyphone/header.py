@@ -1,48 +1,34 @@
-import re
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict
+import re
 from uuid import uuid4
 
-
-def generate_call_id() -> str:
-    return str(uuid4())[0:8]
-
-def generate_tag() -> str:
-    return str(uuid4())[0:6]
-
-def generate_branch() -> str:
-    return f"z9hG4bK-{generate_tag()}"
-
-
-# SIP Header RFC:
 @dataclass
 class Uri:
     user: str
     host: str
     port: int = field(default=5060)
     scheme: str = field(default='sip')
-    password: str = field(default=None)
+    # password: str = field(default=None)
     parameters: dict = field(default_factory=dict)
-    
+
     _SYNTAX = re.compile('^(?P<scheme>[a-zA-Z][a-zA-Z0-9\+\-\.]*):'# scheme
             + '(?:(?:(?P<user>[a-zA-Z0-9\-\_\.\!\~\*\'\(\)&=\+\$,;\?\/\%]+)' # user 
-            + '(?::(?P<password>[^:@;\?]+))?)@)?' # password
+            # + '(?::(?P<password>[^:@;\?]+))?)@)?' # password
             + '(?:(?:(?P<host>[^;\?:]*)(?::(?P<port>[\d]+))?))' # host, port
             + '(?:;(?P<params>[^\?]*))?' # parameters
             )
+    
     def __str__(self):
         uri = f"{self.scheme}:{self.user}@{self.host}"
         if self.port != 5060:
             uri += f":{self.port}"
-        if self.password:
-            uri += f":{self.password}"
+        # if self.password:
+        #     uri += f":{self.password}"
         if self.parameters:
             uri += f";{';'.join([f'{k}={v}' for k, v in self.parameters.items()])}"
         return uri
-    
-    def __repr__(self):
-        return self.__str__()
-    
+
     @classmethod
     def parser(cls, uri: str) -> 'Uri':
         _match = cls._SYNTAX.match(uri)
@@ -56,16 +42,16 @@ class Uri:
             user=_match.group('user'),
             host=_match.group('host'),
             port=int(_match.group('port')) if _match.group('port') else 5060,
-            password=_match.group('password'),
+            # password=_match.group('password'),
             parameters=_params,
         )
 
 
-@dataclass
 class Address:
     uri: Uri
     display_name: str = None
-    
+    tag: str = None
+
     _SYNTAX = [
         re.compile('^(?P<display_name>[a-zA-Z0-9\-\.\_\+\~\ \t]*)<(?P<uri>[^>]+)>'),
         re.compile('^(?:"(?P<display_name>[a-zA-Z0-9\-\.\_\+\~\ \t]+)")[\ \t]*<(?P<uri>[^>]+)>'),
@@ -75,10 +61,9 @@ class Address:
     def __str__(self):
         address = f'"{self.display_name}" ' if self.display_name else ''
         address += f"<{self.uri}>"
+        if self.tag:
+            address += f";tag={self.tag}"
         return address
-    
-    def __repr__(self):
-        return self.__str__()
     
     @classmethod
     def parser(cls, address: str) -> 'Address':
@@ -91,39 +76,35 @@ class Address:
             display_name=_match.group('display_name'),
         )
 
-
-class Header(str):
-    _SYNTAX = re.compile('^(?P<name>[a-zA-Z0-9\-\.\_]+):[\ \t]*(?P<value>.*)$')
-    COMPACT_HEADERS_FIELDS = {
-        'v': 'via', 'f': 'from', 't': 'to', 'm': 'contact',
-        'i': 'call-id', 's': 'subject', 'l': 'content-length',
-        'c': 'content-type', 'k': 'supported', 'o': 'allow',
-        'p': 'p-associated-uri'
-    }
-    
-    def __init__(self, name: str, value: str):
-        self.name = self.COMPACT_HEADERS_FIELDS[name] if name in self.COMPACT_HEADERS_FIELDS else \
-            name.strip()
+class Field:
+    def __init__(self, name: str, value: str, separator: str = ':'):
+        self.name = name.strip()
         self.value = value.strip()
-
-    def __str__(self):
-        return f"{self.name}: {self.value}"
+        self.separator = separator
     
-    def __repr__(self):
-        return f"{self.name}: {self.value}"
+    def __str__(self):
+        return f"{self.name}{self.separator}{self.value}"
     
     @classmethod
-    def parser(cls, header: str) -> 'Header':
-        _match = cls._SYNTAX.match(header)
-        if not _match:
-            raise ValueError(f"Invalid Header: {header}")
-        return Header(
-            name=_match.group('name'),
-            value=_match.group('value')
+    def parser(cls, field: str, separator: str = ':') -> 'Field':
+        _name, _value = field.split(separator)
+        return Field(
+            name=_name,
+            value=_value,
+            separator=separator,
         )
 
+    def generate_call_id(self) -> str:
+        return str(uuid4())[0:8]
 
-class Via(Header):
+    def generate_tag(self) -> str:
+        return str(uuid4())[0:6]
+
+    def generate_branch(self) -> str:
+        return f"z9hG4bK-{self.generate_tag()}"
+
+
+class Via(Field):
     def __init__(
         self,
         host: str,
@@ -136,7 +117,7 @@ class Via(Header):
     ):
         self.host = host
         self.port = port
-        self.branch = branch or generate_branch()
+        self.branch = branch or self.generate_branch()
         self.received = received
         self.rport = rport
         self.protocol = protocol
@@ -151,116 +132,237 @@ class Via(Header):
         if self.rport:
             via += f";rport={self.rport}"
         return via
+    
+    @classmethod
+    def parser(cls, field: str) -> 'Via':
+        _params = dict([p.split('=') for p in field.split(';')])
+        _host, _port = _params.get('host').split(':')
+        return Via(
+            host=_host,
+            port=int(_port),
+            branch=_params.get('branch'),
+            received=_params.get('received'),
+            rport=int(_params.get('rport')),
+            protocol=_params.get('protocol'),
+            transport=_params.get('transport'),
+        )
 
 
-class From(Header):
+class From(Field):
     def __init__(
         self,
         address: Address,
         tag: str = None
     ):
         self.address = address
-        self.tag = tag or generate_tag()
-        super().__init__('from', self._to_string())
+        self.tag = tag or self.generate_tag()
+        super().__init__('From', self._to_string(), separator=':')
     
     def _to_string(self):
         _tag = f';tag={self.tag}' if self.tag else ''
         return f'{self.address}{_tag}'
 
-class To(Header):
+    @classmethod
+    def parser(cls, field: str) -> 'From':
+        _tag = re.search(r';tag=(\w+)', field)
+        if _tag:
+            _tag = _tag.group(1)
+            field = field.replace(f';tag={_tag}', '')
+        return From(
+            address=Address.parser(field),
+            tag=_tag,
+        )
+
+class To(Field):
     def __init__(
         self,
         address: Address,
         tag: str = None
     ):
         self.address = address
-        self.tag = tag or generate_tag()
-        super().__init__('to', self._to_string())
+        self.tag = tag or self.generate_tag()
+        super().__init__('To', self._to_string(), separator=':')
     
     def _to_string(self):
         _tag = f';tag={self.tag}' if self.tag else ''
         return f'{self.address}{_tag}'
 
+    @classmethod
+    def parser(cls, field: str) -> 'To':
+        _tag = re.search(r';tag=(\w+)', field)
+        if _tag:
+            _tag = _tag.group(1)
+            field = field.replace(f';tag={_tag}', '')
+        return From(
+            address=Address.parser(field),
+            tag=_tag,
+        )
 
-class Contact(Header):
+
+class Contact(Field):
     def __init__(
         self,
         address: Address,
-        expires: int = None
+        expires: str = None
     ):
         self.address = address
-        self.expires = expires
-        super().__init__('contact', self._to_string())
+        self.expires = expires or self.generate_tag()
+        super().__init__('Contact', self._to_string(), separator=':')
     
     def _to_string(self):
         _expires = f";expires={self.expires}" if self.expires else ''
         return f'{self.address}{_expires}'
 
+    @classmethod
+    def parser(cls, field: str) -> 'Contact':
+        _expires = re.search(r';expires=(\d+)', field)
+        if _expires:
+            _expires = _expires.group(1)
+            field = field.replace(f';expires={_expires}', '')
+        return Contact(
+            address=Address.parser(field),
+            expires=_expires,
+        )
 
-class CallId(Header):
+
+class CallId(Field):
     def __init__(self, call_id: str = None):
-        self.call_id = call_id or generate_call_id()
-        super().__init__('call-id', self.call_id)
+        self.call_id = call_id or self.generate_call_id()
+        super().__init__('Call-ID', self.call_id)
+
+    @classmethod
+    def parser(cls, field: str) -> 'CallId':
+        _, _call_id = field.split(':')
+        return CallId(_call_id)
 
 
-class CSeq(Header):
+class CSeq(Field):
     def __init__(self, method: str, seq: int):
         self.method = method
         self.seq = seq
-        super().__init__('cseq', self._to_string())
+        super().__init__('Cseq', self._to_string())
     
     def _to_string(self):
         return f"{self.seq} {self.method}"
 
+    @classmethod
+    def parser(cls, field: str) -> 'CSeq':
+        _, _seq = field.split(':')
+        _seq, _method = _seq.split(' ')
+        return CSeq(_method, int(_seq))
 
-class MaxForword(Header):
+
+class MaxForword(Field):
     def __init__(self, max_forword: int = 70):
-        super().__init__('max-forword', str(max_forword))
+        super().__init__('Max-Forwords', str(max_forword))
+
+    @classmethod
+    def parser(cls, field: str) -> 'MaxForword':
+        _, _max_forword = field.split(':')
+        return MaxForword(int(_max_forword))
+
+
+class ContentType(Field):
+    def __init__(self, content_type: str = 'application/sdp'):
+        super().__init__('Content-Type', content_type)
+
+    @classmethod
+    def parser(cls, field: str) -> 'ContentType':
+        _, _content_type = field.split(':')
+        return ContentType(_content_type)
+
+
+class ContentLength(Field):
+    def __init__(self, content_length: int = 0):
+        super().__init__('Content-Length', str(content_length))
+
+    @classmethod
+    def parser(cls, field: str) -> 'ContentLength':
+        _, _content_length = field.split(':')
+        return ContentLength(int(_content_length))
+
+
+class Authorization(Field):
+    def __init__(self, username: str, password: str, realm: str, nonce: str, uri: str, response: str):
+        self.username = username
+        self.password = password
+        self.realm = realm
+        self.nonce = nonce
+        self.uri = uri
+        self.response = response
+        super().__init__('Authorization', self._to_string())
+    
+    def _to_string(self):
+        return f"Digest username={self.username}, realm={self.realm}, nonce={self.nonce}, uri={self.uri}, response={self.response}"
+
+    @classmethod
+    def parser(cls, field: str) -> 'Authorization':
+        _params = dict([p.split('=') for p in field.split(',')])
+        return Authorization(
+            username=_params.get('username'),
+            password=_params.get('password'),
+            realm=_params.get('realm'),
+            nonce=_params.get('nonce'),
+            uri=_params.get('uri'),
+            response=_params.get('response'),
+        )
 
 
 @dataclass
-class HeaderFactory:
-    via: Via = None
-    from_: From = None
-    to: To = None
+class SipHeader:
+    via: Via
+    from_: From
+    to: To
+    call_id: CallId
+    cseq: CSeq
     contact: Contact = None
-    call_id: CallId = None
-    cseq: CSeq = None
-    extras_header: List[Header] = field(default_factory=list)
+    max_forword: MaxForword = field(default_factory=MaxForword)
+    content_type: ContentType = field(default_factory=ContentType)
+    content_length: ContentLength = field(default_factory=ContentLength)
+    authorization: Authorization = None
+    extras_fields: Dict[str, Field] = field(default_factory=dict)
 
-    def __repr__(self):
+    COMPACT_HEADERS_FIELDS = {
+        'v': 'Via', 'f': 'From', 't': 'To', 'm': 'Contact',
+        'i': 'Call-ID', 's': 'Subject', 'l': 'Content-Length',
+        'c': 'Content-Type', 'k': 'Supported', 'o': 'Allow',
+        'p': 'P-Associated-URI'
+    }
+
+    def __post_init__(self):
+        if self.name.lower() in self.COMPACT_HEADERS_FIELDS:
+            self.name = self.COMPACT_HEADERS_FIELDS[self.name.lower()]
+
+    def __str__(self):
         pass
-
+    
     @classmethod
-    def from_to_string(cls, headers: str) -> 'HeaderFactory':
-        extras_header = []
+    def parser(cls, headers: str) -> 'SipHeader':
+        _headers = {}
         lines = headers.split('\r\n')
-        
         for line in lines:
             name, value = line.split(':')
             match name.lower():
                 case 'via':
-                    via = Via.parser(value)
+                    _headers['via'] = Via.parser(value)
                 case 'from':
-                    from_ = From.parser(value)
+                    _headers['from'] = From.parser(value)
                 case 'to':
-                    to = To.parser(value)
+                    _headers['to'] = To.parser(value)
                 case 'contact':
-                    contact = Contact.parser(value)
+                    _headers['contact'] = Contact.parser(value)
                 case 'call-id':
-                    call_id = CallId.parser(value)
+                    _headers['call_id'] = CallId.parser(value)
                 case 'cseq':
-                    cseq = CSeq.parser(value)
+                    _headers['cseq'] = CSeq.parser(value)
+                case 'max-forword':
+                    _headers['max_forword'] = MaxForword.parser(value)
+                case 'content-type':
+                    _headers['content_type'] = ContentType.parser(value)
+                case 'content-length':
+                    _headers['content_length'] = ContentLength.parser(value)
+                case 'authorization':
+                    _headers['authorization'] = Authorization.parser(value)
                 case _:
-                    extras_header.append(Header(name, value))
-        return HeaderFactory(
-            via=via,
-            from_=from_,
-            to=to,
-            contact=contact,
-            call_id=call_id,
-            cseq=cseq,
-            extras_header=extras_header
-        )
-        
-        
+                    _headers[name] = Field.parser(name, value)
+        return SipHeader(**_headers)
