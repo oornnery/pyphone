@@ -7,6 +7,7 @@ import hashlib
 import re
 import asyncio
 from uuid import uuid4
+import random
 from enum import Enum, IntEnum
 from dataclasses import dataclass, field
 from typing import List, Dict, Union, Tuple, Optional
@@ -29,9 +30,17 @@ class SipMethod(Enum):
 
     def __str__(self):
         return self.value
+    
+    @classmethod
+    def methods(cls) -> List[str]:
+        return [method for method in cls]
+    
+    @classmethod
+    def from_string(cls, method: str) -> 'SipMethod':
+        return cls(method.upper())
 
 
-class SipStatusCode(IntEnum):
+class SipStatusCode(Enum):
     TRYING = (100, "Trying")
     RINGING = (180, "Ringing")
     OK = (200, "OK")
@@ -55,6 +64,17 @@ class SipStatusCode(IntEnum):
 
     def __str__(self):
         return f"{self.value} {self.phrase}"
+
+    @classmethod
+    def from_string(cls, sip_status) -> 'SipStatusCode':
+        if sip_status.isdigit():
+            for status in cls:
+                if status.value == int(sip_status):
+                    return status
+        else:
+            for status in cls:
+                if status.phrase == sip_status:
+                    return status
 
 
 class DialogState(Enum):
@@ -431,33 +451,324 @@ class SipHeader:
                     _headers[name] = Field.parser(name, value)
         return SipHeader(**_headers)
 
+
+class MediaType(Enum):
+    AUDIO = "audio"
+    VIDEO = "video"
+    MESSAGE = "message"
+
+    def __str__(self):
+        return self.value
+
+class MediaSessionType(Enum):
+    SENDRECV = "sendrecv"
+    SENDONLY = "sendonly"
+    RECVONLY = "recvonly"
+    INACTIVE = "inactive"
+
+    def __str__(self):
+        return self.value
+
+
+class CodecType(Enum):
+    PCMU = ('0', 'pcmu', '8000')
+    PCMA = ('8', 'pcma', '8000')
+
+    def __new__(self, code: str, description: str, rate: str):
+        obj = object.__new__(self)
+        obj.code = code
+        obj.description = description
+        obj.rate = rate
+        obj._value_ = code
+        return obj
+
+    @classmethod
+    def codecs(cls) -> List[str]:
+        return [codec for codec in cls]
+
+    def __str__(self) -> str:
+        return f'{self.code} {self.description}/{self.rate}'
+
+
+class DtmfPayloadType(Enum):
+    RFC_2833 = ('101', 'telephone-event', '8000', '101 0-16')
+
+    def __new__(self, code: str, description: str, rate: str, fmtp: str):
+        obj = object.__new__(self)
+        obj.code = code
+        obj.description = description
+        obj.rate = rate
+        obj.fmtp = fmtp
+        return obj
+
+    def __str__(self) -> str:
+        return f'{self.code} {self.description}/{self.rate}'
+
+class MediaProtocolType(Enum):
+    RTP_AVP = 'RTP/AVP'
+    RTCP = 'RTCP'
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class Owner(Field):
+    def __init__(
+        self,
+        username: str = '-',
+        address: str = '0.0.0.0',
+        address_type: str = 'IP4',
+        network_type: str = 'IN',
+        session_id: str = None,
+        session_version: str = None
+    ):
+        self.username = username
+        self.address = address
+        self.address_type = address_type
+        self.network_type = network_type
+        self.session_id = session_id or self.generate_call_id()
+        self.session_version = session_version or self.generate_call_id()
+        super().__init__(
+            'o',
+            f'{self.username} {self.session_id} {self.session_version} {self.network_type} {self.address_type} {self.address}',
+            separator='='
+            )
+    
+    @classmethod
+    def parser(cls, field: str) -> 'Owner':
+        _, field = field.split('=', maxsplit=1)
+        _username, _session_id, _session_version, _network_type, _address_type, _address = field.split(' ')
+        return Owner(
+            username=_username,
+            address=_address,
+            address_type=_address_type,
+            network_type=_network_type,
+            session_id=_session_id,
+            session_version=_session_version,
+        )
+
+
+class ConnectionInformation(Field):
+    def __init__(
+        self,
+        network_type: str = 'IN',
+        address_type: str = 'IP4',
+        address: str = '0.0.0.0'
+    ):
+        self.network_type = network_type
+        self.address_type = address_type
+        self.address = address
+        super().__init__(
+            'c',
+            f'{self.network_type} {self.address_type} {self.address}',
+            separator='='
+            )
+    
+    @classmethod
+    def parser(cls, field: str) -> 'ConnectionInformation':
+        _, field = field.split('=', maxsplit=1)
+        _network_type, _address_type, _address = field.split(' ')
+        return ConnectionInformation(
+            network_type=_network_type,
+            address_type=_address_type,
+            address=_address,
+        )
+
+
+class MediaDescription(Field):
+    PORT_RANGE = (10000, 20000)
+    def __init__(
+        self,
+        port: int = None,
+        media_type: MediaType = MediaType.AUDIO,
+        protocol: MediaProtocolType = MediaProtocolType.RTP_AVP,
+        codecs: List[CodecType] = CodecType.codecs(),
+        dtmf_payload: DtmfPayloadType = DtmfPayloadType.RFC_2833,
+    ):
+        self.media_type = media_type
+        self.port = port or self._generate_port()
+        self.protocol = protocol
+        self.codecs = codecs
+        self.dtmf_payload = dtmf_payload
+        _codec = ' '.join([str(c.code) for c in self.codecs])
+        super().__init__(
+            'm',
+            f'{self.media_type} {self.port} {self.protocol} {_codec} {self.dtmf_payload.code}',
+            separator='='
+        )
+    
+    def _generate_port(self) -> int:
+        return random.randint(*self.PORT_RANGE)
+
+    @classmethod
+    def parser(cls, field: str) -> 'MediaDescription':
+        _, field = field.split('=', maxsplit=1)
+        _media_type, _port, _protocol, *_codes = field.split(' ')
+        _dtmf_payload = _codes[-1]
+        _codecs = [CodecType(c) for c in _codes[:-1]]
+        return MediaDescription(
+            media_type=MediaType(_media_type),
+            port=int(_port),
+            protocol=MediaProtocolType(_protocol),
+            codecs=_codecs,
+            dtmf_payload=DtmfPayloadType(_dtmf_payload),
+        )
+
+
+class SessionName(Field):
+    def __init__(self, name: str = 'SDP Session'):
+        self.name = name or self.generate_call_id()
+        super().__init__('s', self.name, separator='=')
+
+    @classmethod
+    def parser(cls, field: str) -> 'SessionName':
+        _, _name = field.split('=', maxsplit=1)
+        return SessionName(_name)
+
+
+class MediaSession(Field):
+    def __init__(self, version: str = '0'):
+        self.version = version
+        super().__init__('v', self.version, separator='=')
+
+    @classmethod
+    def parser(cls, field: str) -> 'MediaSession':
+        _, _version = field.split('=', maxsplit=1)
+        return MediaSession(_version)
+
+
+class Time(Field):
+    def __init__(self, start: int = 0, stop: int = 0):
+        self.start = start
+        self.stop = stop
+        super().__init__('t', f'{self.start} {self.stop}', separator='=')
+
+    @classmethod
+    def parser(cls, field: str) -> 'Time':
+        _, field = field.split('=', maxsplit=1)
+        _start, _stop = field.split(' ')
+        return Time(int(_start), int(_stop))
+
+
+class Attribute(Field):
+    def __init__(self, attribute: str):
+        self.attribute = attribute
+        super().__init__('a', self.attribute, separator='=')
+
+    @classmethod
+    def parser(cls, field: str) -> 'Attribute':
+        _, _value = field.split('=', maxsplit=1)
+        return Attribute(_value)
+
+
+class AttrPtime(Attribute):
+    def __init__(self, ptime: int = 20):
+        self.ptime = ptime
+        super().__init(f'ptime:{self.ptime}')
+
+    @classmethod
+    def parser(cls, field: str) -> 'AttrPtime':
+        _, _value = field.split('=', maxsplit=1)
+        return AttrPtime(int(_value))
+
+class AttrMediaSession(Attribute):
+    def __init__(self, session_type: MediaSessionType):
+        self.session_type = session_type
+        super().__init__(str(self.session_type))
+
+    @classmethod
+    def parser(cls, field: str) -> 'AttrMediaSession':
+        _, _value = field.split('=', maxsplit=1)
+        return AttrMediaSession(MediaSessionType(_value))
+
+
+class AttrRtpMap(Attribute):
+    def __init__(self, payload_type: str, encoding_name: str, clock_rate: str, channels: str = None):
+        self.payload_type = payload_type
+        self.encoding_name = encoding_name
+        self.clock_rate = clock_rate
+        self.channels = channels
+        super().__init(f'rtpmap:{self.payload_type} {self.encoding_name}/{self.clock_rate}/{self.channels}' if self.channels else f'rtpmap:{self.payload_type} {self.encoding_name}/{self.clock_rate}')
+
+    @classmethod
+    def parser(cls, field: str) -> 'AttrRtpMap':
+        _, _value = field.split('=', maxsplit=1)
+        _payload_type, _encoding_name, _clock_rate, *_channels = _value.split(' ')
+        _channels = _channels[0] if _channels else None
+        return AttrRtpMap(_payload_type, _encoding_name, _clock_rate, _channels)
+
+
+class AttrFmtp(Attribute):
+    def __init__(self, payload_type: str, config: str):
+        self.payload_type = payload_type
+        self.config = config
+        super().__init(f'fmtp:{self.payload_type} {self.config}')
+
+    @classmethod
+    def parser(cls, field: str) -> 'AttrFmtp':
+        _, _value = field.split('=', maxsplit=1)
+        _payload_type, _config = _value.split(' ')
+        return AttrFmtp(_payload_type, _config)
+
+
 @dataclass
 class SdpMedia:
-    owner: Body
-    connection_info: Body = None
-    media_description: Body = None
-    session_name: Body = None
-    media_session: Body = None
-    ptime: Body = None
-    attributes: List[Body] = field(default_factory=list)
-    extras_fields: Dict[str, Body] = field(default_factory=dict)
+    '''
+    v=0\r\n
+    o=- 20211 20211 IN IP4 local.domain.com\r\n
+    s=SDP data\r\n
+    c=IN IP4 local.domain.com\r\n
+    t=0 0\r\n
+    m=audio 11808 RTP/AVP 9 0 8 18 101\r\n
+    a=rtpmap:9 G722/8000\r\n
+    a=rtpmap:0 PCMU/8000\r\n
+    a=rtpmap:8 PCMA/8000\r\n
+    a=rtpmap:18 G729/8000\r\n
+    a=fmtp:18 annexb=no\r\n
+    a=ptime:20\r\n
+    a=sendrecv\r\n
+    a=rtpmap:101 telephone-event/8000\r\n
+    a=fmtp:101 0-15\r\n
+    '''
+    owner: Owner = field(default_factory=Owner)
+    connection_information: ConnectionInformation = field(default_factory=ConnectionInformation)
+    media_description: MediaDescription = field(default_factory=MediaDescription)
+    session_name: SessionName = field(default_factory=SessionName)
+    media_session: AttrMediaSession = field(default_factory=AttrMediaSession)
+    ptime: AttrPtime = field(default_factory=AttrPtime)
+    rtp_maps: List[AttrRtpMap] = field(default_factory=list)
+    fmtps: List[AttrFmtp] = field(default_factory=list)
+    attrs: List[Attribute] = field(default_factory=list)
+    extras_fields: Dict[str, Field] = field(default_factory=dict)
+
+    def __str__(self):
+        pass
+    
+    @classmethod
+    def parser(cls, media: str) -> 'SdpMedia':
+        pass
 
 
 class SipMessage(ABC):
-    def __init__(self, headers: dict[str, list[Header]] = None, body: dict[str, list[Body]] = None):
+    def __init__(
+        self,
+        method: SipMethod = None,
+        status_code: SipStatusCode = None,
+        headers: SipHeader = None,
+        body: SdpMedia = None):
         self.headers = headers or defaultdict(list)
         self.body = body or defaultdict(list)
     
-    def add_header(self, header: Header):
+    def add_header(self, header: Field):
         self.headers[header.name].append(header)
     
-    def get_header(self, name: str) -> Header:
+    def get_header(self, name: str) -> Field:
         return self.headers.get(name)
 
-    def add_body(self, body: Body):
+    def add_body(self, body: Field):
         self.body[body.name].append(body)
     
-    def get_body(self, name: str) -> Body:
+    def get_body(self, name: str) -> Field:
         return self.body.get(name)
 
     def to_bytes(self):
@@ -470,75 +781,6 @@ class SipMessage(ABC):
     @abstractmethod
     def __str__(self):
         pass
-    
-    
-
-class SipRequest(SipMessage):
-    def __init__(self, method: SipMethod, uri: Uri, headers: dict[str, list[Header]] = None, body: dict[str, list[Body]] = None):
-        super().__init__(headers, body)
-        self.method = method
-        self.uri = uri
-    
-    def __str__(self):
-        return f"{self.method} {self.uri} SIP/2.0\n" + '\n'.join([str(h) for h in self.headers]) + '\n' + '\n'.join([str(b) for b in self.body])
-
-    @classmethod
-    def parser(cls, message) -> 'SipRequest':
-        _lines = message.split(b'\n')
-        _method, _uri, _version = _lines[0].split(b' ')
-        _headers = defaultdict(list)
-        _body = defaultdict(list)
-        _current = None
-        for line in _lines[1:]:
-            if not line:
-                continue
-            if ':' in line:
-                _header = Header.parser(line.decode())
-                _headers[_header.name].append(_header)
-            elif '=' in line:
-                _body = Body.parser(line.decode())
-                _body[_body.name].append(_body)
-            else:
-                continue
-        return SipRequest(
-            method=SipMethod(_method),
-            uri=Uri.parser(_uri),
-            headers=_headers,
-            body=_body
-        )
-
-
-class SipResponse(SipMessage):
-    def __init__(self, status_code: SipStatusCode, headers: dict[str, list[Header]] = None, body: dict[str, list[Body]] = None):
-        super().__init__(headers, body)
-        self.status_code = status_code
-    
-    def __str__(self):
-        return f"SIP/2.0 {self.status_code}\n" + '\n'.join([str(h) for h in self.headers]) + '\n' + '\n'.join([str(b) for b in self.body])
-
-    @classmethod
-    def parser(cls, message) -> 'SipResponse':
-        _lines = message.split(b'\n')
-        _version, _status_code, _phrase = _lines[0].split(b' ')
-        _headers = defaultdict(list)
-        _body = defaultdict(list)
-        _current = None
-        for line in _lines[1:]:
-            if not line:
-                continue
-            if ':' in line:
-                _header = Header.parser(line.decode())
-                _headers[_header.name].append(_header)
-            elif '=' in line:
-                _body = Body.parser(line.decode())
-                _body[_body.name].append(_body)
-            else:
-                continue
-        return SipResponse(
-            status_code=SipStatusCode(_status_code),
-            headers=_headers,
-            body=_body
-        )
 
 
 class SipDialog:
@@ -564,7 +806,7 @@ class SipDialog:
 
 
 class SipTransaction:
-    def __init__(self, request: SipRequest):
+    def __init__(self, request: SipMessage):
         self.request = request
         self.response = None
         self.state = None
@@ -580,7 +822,7 @@ class SipTransaction:
     def retransmit_request(self):
         pass
     
-    def receive_response(self, response: SipResponse):
+    def receive_response(self, response: SipMessage):
         self.response = response
         if response.status_code in [SipStatusCode.TRYING, SipStatusCode.RINGING]:
             self.state = "COMPLETED"
@@ -656,7 +898,7 @@ class SipHandler(SocketInterface):
     
     async def receive(self):
         for data, addr in self._receive():
-            message = SipRequest.parser(data)
+            message = SipMessage.parser(data)
             self.callback(message, addr)
 
     async def start(self):
@@ -765,9 +1007,9 @@ class SipClient:
 
     async def on_received_message(self, message: SipMessage, addr: Tuple[str, int]):
         match message:
-            case isinstance(message, SipRequest):
+            case message.is_request():
                 log.info(f"Received SIP request: {message}")
-            case isinstance(message, SipResponse):
+            case message.is_response():
                 log.info(f"Received SIP response: {message}")
             case _:
                 log.error(f"Invalid SIP message: {message}")
@@ -787,20 +1029,20 @@ class SipClient:
     
     def create_request(self, method: SipMethod, to_address: Address):
         self.cseq += 1
-        request = SipRequest(
+        request = SipMessage(
             method=method,
             uri=to_address.uri,
             headers={
-                'CSeq': [Header('CSeq', f"{self.cseq} {method}")]
+                'CSeq': [Field('CSeq', f"{self.cseq} {method}")]
             }
         )
         return request
     
-    def create_response(self, request: SipRequest, status_code: SipStatusCode):
-        response = SipResponse(
+    def create_response(self, request: SipMessage, status_code: SipStatusCode):
+        response = SipMessage(
             status_code=status_code,
             headers={
-                'CSeq': [Header('CSeq', f"{request.get_header('CSeq').value} {request.method}")]
+                'CSeq': [Field('CSeq', f"{request.get_header('CSeq').value} {request.method}")]
             }
         )
         return response
