@@ -418,7 +418,23 @@ class SipHeader:
             self.name = self.COMPACT_HEADERS_FIELDS[self.name.lower()]
 
     def __str__(self):
-        pass
+        _headers = ''
+        _headers += f'{self.via}\r\n'
+        _headers += f'{self.from_}\r\n'
+        _headers += f'{self.to}\r\n'
+        if self.contact:
+            _headers += f'{self.contact}\r\n'
+        _headers += f'{self.call_id}\r\n'
+        _headers += f'{self.cseq}\r\n'
+        _headers += f'{self.max_forword}\r\n'
+        _headers += f'{self.content_type}\r\n'
+        _headers += f'{self.content_length}\r\n'
+        if self.authorization:
+            _headers += f'{self.authorization}\r\n'
+        if self.extras_fields:
+            for field in self.extras_fields.values():
+                _headers += f'{field}\r\n'
+        return _headers
     
     @classmethod
     def parser(cls, headers: str) -> 'SipHeader':
@@ -732,21 +748,64 @@ class SdpMedia:
     '''
     owner: Owner = field(default_factory=Owner)
     connection_information: ConnectionInformation = field(default_factory=ConnectionInformation)
-    media_description: MediaDescription = field(default_factory=MediaDescription)
     session_name: SessionName = field(default_factory=SessionName)
+    media_description: MediaDescription = field(default_factory=MediaDescription)
     media_session: AttrMediaSession = field(default_factory=AttrMediaSession)
     ptime: AttrPtime = field(default_factory=AttrPtime)
-    rtp_maps: List[AttrRtpMap] = field(default_factory=list)
-    fmtps: List[AttrFmtp] = field(default_factory=list)
+    rtp_map: List[AttrRtpMap] = field(default_factory=list)
+    fmtp: List[AttrFmtp] = field(default_factory=list)
     attrs: List[Attribute] = field(default_factory=list)
     extras_fields: Dict[str, Field] = field(default_factory=dict)
 
     def __str__(self):
-        pass
+        _sdp = ''
+        _sdp += f'{self.owner}\r\n'
+        _sdp += f'{self.connection_information}\r\n'
+        _sdp += f'{self.session_name}\r\n'
+        _sdp += f'{self.media_description}\r\n'
+        if self.rtp_map:
+            for rtp_map in self.rtp_map:
+                _sdp += f'{rtp_map}\r\n'
+        if self.fmtp:
+            for fmtp in self.fmtp:
+                _sdp += f'{fmtp}\r\n'
+        if self.ptime:
+            _sdp += f'{self.ptime}\r\n'
+        if self.media_session:
+            _sdp += f'{self.media_session}\r\n'
+        if self.attrs:
+            for attr in self.attrs:
+                _sdp += f'{attr}\r\n'
+        return _sdp
     
     @classmethod
     def parser(cls, media: str) -> 'SdpMedia':
-        pass
+        lines = media.split('\r\n')
+        _media = {}
+        for line in lines:
+            name, value = line.split('=', maxsplit=1)
+            match name:
+                case 'o':
+                    _media['owner'] = Owner.parser(value)
+                case 'c':
+                    _media['connection_information'] = ConnectionInformation.parser(value)
+                case 'm':
+                    _media['media_description'] = MediaDescription.parser(value)
+                case 's':
+                    _media['session_name'] = SessionName.parser(value)
+                case 'a':
+                    if 'rtpmap' in value:
+                        _media['rtp_map'].append(AttrRtpMap.parser(value))
+                    elif 'fmtp' in value:
+                        _media['fmtp'].append(AttrFmtp.parser(value))
+                    elif 'ptime' in value:
+                        _media['ptime'] = AttrPtime.parser(value)
+                    elif 'sendrecv' in value:
+                        _media['media_session'] = AttrMediaSession.parser(value)
+                    else:
+                        _media['attrs'].append(Attribute.parser(value))
+        return SdpMedia(**_media)
+            
 
 
 class SipMessage(ABC):
@@ -758,6 +817,14 @@ class SipMessage(ABC):
         body: SdpMedia = None):
         self.headers = headers or defaultdict(list)
         self.body = body or defaultdict(list)
+    
+    @property
+    def is_request(self) -> bool:
+        return self.method is not None
+    
+    @property
+    def is_response(self) -> bool:
+        return self.status_code is not None
     
     def add_header(self, header: Field):
         self.headers[header.name].append(header)
@@ -776,12 +843,22 @@ class SipMessage(ABC):
     
     @abstractmethod
     def parser(cls, message: bytes) -> 'SipMessage':
-        pass
+        headers, body = message.split(b'\r\n\r\n')
+        _headers = SipHeader.parser(headers)
+        if body:
+            _body = SdpMedia.parser(body)
+        return SipMessage(headers=_headers, body=_body)
     
     @abstractmethod
     def __str__(self):
-        pass
-
+        if self.is_request:
+            _message = f'{self.method} {self.uri} SIP/2.0\r\n'
+        elif self.is_response:
+            _message = f'SIP/2.0 {self.status_code}\r\n'
+        _message += f'{self.headers}'
+        if self.body:
+            _message += f'\r\n{self.body}'
+        return _message
 
 class SipDialog:
     def __init__(self, call_id: str, local_tag: str, remote_tag: str):
