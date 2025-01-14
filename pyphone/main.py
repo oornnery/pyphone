@@ -1,31 +1,31 @@
-import socket
+import asyncio
 import time
+import socket
+import random
+import re
 import uuid
 import logging
-import base64
-import hashlib
-import re
-import asyncio
-from uuid import uuid4
-import random
-from enum import Enum, IntEnum
-from dataclasses import dataclass, field
-from typing import List, Dict, Union, Tuple, Optional
-from collections import defaultdict
-from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, List, Optional, Tuple, Union
 
+"""
+SIP (Session Initiation Protocol)
+RFC 3261: https://tools.ietf.org/html/rfc3261
 
-from pyphone.message import SipMessage, Field, Address
+SDP (Session Description Protocol)
+RFC 4566: https://tools.ietf.org/html/rfc4566
 
-# Exceptions
-class SipException(Exception): ...
-class SipParseException(SipException): ...
-class SipTransportException(SipException): ...
-class SipTransactionException(SipException): ...
+RTP (Real-time Transport Protocol)
+RFC 3550: https://tools.ietf.org/html/rfc3550
+
+DTMF (Dual-tone multi-frequency signaling)
+RFC 4733: https://tools.ietf.org/html/rfc4733
+
+"""
 
 # Logging
 logger = logging.getLogger(__name__)
-
 
 # Constants
 EOL = r'\r\n'
@@ -80,14 +80,55 @@ SDP_HEADERS = {
     "time_zone": "z",
 }
 
+# Regex Patterns
+REQUEST_LINE_PATTERN = r'(?P<method>\w+)\s+(?P<uri>.+)\s+(?P<scheme>SIP)/(?P<version>\d+\.\d+)'
+STATUS_LINE_PATTERN = r'^(?P<scheme>SIP)/(?P<version>\d+\.\d+)\s+(?P<status_code>\d+)\s+(?P<reason>.+)'
+URI_PATTERN = r'(?:\"(?P<display_info>[^\"]+)\"\s+)?<sip:(?:\+)?(?P<user>[^@]+)@(?P<host>[^:;>]+)(?::(?P<port>\d+))?(?:;(?P<params>[^>]+))?>(?:;tag=(?P<tag>[^>\s]+))?'
+ADDRESS_PATTERN = r'^(?P<scheme>SIP)/(?P<version>\d+\.\d+)/(?P<protocol>\w+)\s+(?P<address>[\d\.]+):(?P<port>\d+);branch=(?P<branch>[\w\.]+)'
+HEADER_PATTERN = r'(?P<name>[\w-]+):\s+(?P<value>.+)'
+BODY_PATTERN = r'(?P<name>\w+)\s*=\s*(?P<value>.+)'
+
+
+# Exceptions
+class SipException(Exception): ...
+
 # Utils
-def generate_branch(): ...
-def generate_call_id(): ...
-def generate_tag(): ...
-def parse_uri(uri: str): ...
-def parse_address(address: str): ...
-def parse_header(header: str): ...
-def parse_body(body: str): ...
+def generate_branch(len: int = 8):
+    """Generate a random branch ID."""
+    return f"{SIP_BRANCH}-{uuid.uuid4().hex[:len]}"
+
+def generate_call_id(host: str = None):
+    """Generate a random call ID."""
+    host = host or socket.gethostbyname(socket.gethostname())
+    return f"{uuid.uuid4().hex}@{host}"
+
+def generate_tag(len: int = 6):
+    """Generate a random tag."""
+    return f"{uuid.uuid4().hex[:len]}"
+
+def parser_request_line(line: str):
+    """Parse a SIP request line."""
+    ...
+
+def parser_status_line(line: str):
+    """Parse a SIP status line."""
+    ...
+
+def parse_uri(uri: str):
+    """Parse a SIP URI."""
+    ...
+    
+def parser_address(address: str):
+    """Parse a SIP address."""
+    ...
+
+def parse_header(header: str):
+    """Parser a SIP header normal or compact."""
+    ...
+    
+def parse_body(body: str):
+    """Parser a SIP body."""
+    ...
 
 
 # Enums (Enumerations)
