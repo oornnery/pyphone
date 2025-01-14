@@ -1,7 +1,7 @@
 import socket
 import time
 import uuid
-import loggerging
+import logging
 import base64
 import hashlib
 import re
@@ -16,6 +16,79 @@ from abc import ABC, abstractmethod
 
 
 from pyphone.message import SipMessage, Field, Address
+
+# Exceptions
+class SipException(Exception): ...
+class SipParseException(SipException): ...
+class SipTransportException(SipException): ...
+class SipTransactionException(SipException): ...
+
+# Logging
+logger = logging.getLogger(__name__)
+
+
+# Constants
+EOL = r'\r\n'
+SIP_SCHEME = 'SIP'
+SIP_VERSION = '2.0'
+SIP_BRANCH = 'z9hG4bK'
+SIP_MAX_FORWARDS = 70
+SIP_CONTENT = "application"
+SIP_CONTENT_TYPE = "sdp"
+
+COMPACT_HEADERS = {
+    "v": "via",
+    "f": "from",
+    "t": "to",
+    "m": "contact",
+    "i": "call-id",
+    "e": "contact-encoding",
+    "l": "content-length",
+    "c": "content-type",
+    "s": "subject",
+    "k": "supported",
+}
+
+HEADERS = {
+    "via": "Via",
+    "from": "From",
+    "to": "To",
+    "contact": "Contact",
+    "call-id": "Call-ID",
+    "cseq": "CSeq",
+    "max-forwards": "Max-Forwards",
+    "content-length": "Content-Length",
+    "content-type": "Content-Type",
+    "authorization": "Authorization",
+    "www-authenticate": "WWW-Authenticate",
+    "proxy-authenticate": "Proxy-Authenticate",
+}
+
+SDP_HEADERS = {
+    "version": "v",
+    "origin": "o",
+    "session_name": "s",
+    "connection_info": "c",
+    "bandwidth_info": "b",
+    "time_description": "t",
+    "media_description": "m",
+    "attribute": "a",
+    "email_address": "e",
+    "phone_number": "p",
+    "uri": "u",
+    "repeat_time": "r",
+    "time_zone": "z",
+}
+
+# Utils
+def generate_branch(): ...
+def generate_call_id(): ...
+def generate_tag(): ...
+def parse_uri(uri: str): ...
+def parse_address(address: str): ...
+def parse_header(header: str): ...
+def parse_body(body: str): ...
+
 
 # Enums (Enumerations)
 class SipMethod(Enum):
@@ -99,6 +172,28 @@ class UserAgentConfig:
     expires: int = 30
     contact: str = None
 
+# Connections (Network Layer)
+class NetworkLayer:
+    def send(self): ...
+    def receive(self): ...
+    def start(self): ...
+    def close(self): ...
+
+class TransportLayer(NetworkLayer):
+    def retransmit(self): ...
+    def on_received(self): ...
+    def on_timeout(self): ...
+    def on_error(self): ...
+
+class SipHandler(TransportLayer):
+    pass
+
+class RtpHandler(TransportLayer):
+    pass
+
+class DtmfHandler(TransportLayer):
+    pass
+
 
 # Messages (Message Layer)
 class Message:
@@ -108,30 +203,18 @@ class Message:
     def header(self): ...
     def body(self): ...
 
+class Header: ...
+class Body: ...
+class Authentication: ...
+
 class SipRequest:
     pass
 
 class SipResponse:
     pass
 
-# Connections (Network Layer)
-class Connection:
-    def send(self): ...
-    def receive(self): ...
-    def start(self): ...
-    def close(self): ...
 
-class SipHandler(Connection):
-    pass
-
-class RtpHandler(Connection):
-    pass
-
-class DtmfHandler(Connection):
-    pass
-
-
-class SipClient:
+class ApplicationLayer:
     transactions: dict[str, str] = {}
     dialoggers: dict[str, str] = {}
     cseq = 0
@@ -203,6 +286,10 @@ class SipClient:
             }
         )
         return response
+
+
+# Sessions (Session Layer)
+class SessionLayer(ApplicationLayer): ...
 
 
 if __name__ == '__main__':
