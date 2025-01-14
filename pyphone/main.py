@@ -216,7 +216,7 @@ class SipResponse:
 
 class ApplicationLayer:
     transactions: dict[str, str] = {}
-    dialoggers: dict[str, str] = {}
+    dialogers: dict[str, str] = {}
     cseq = 0
     
     def __init__(
@@ -227,65 +227,24 @@ class ApplicationLayer:
     ):
         self.nw_cfg = nw_cfg
         self.ua_cfg = ua_cfg
-
         self.event_loop = event_loop or asyncio.get_event_loop()
-        self.sock: Connection = None
+        # Handlers
+        self.sock: SipHandler = None
         self.rtp: RtpHandler = None
         self.dtmf: DtmfHandler = None
+        # Taskss
         self._receive_message_task = None
     
-    async def start(self):
-        await self.sock.start()
-
-    async def close(self):
-        await self.sock.close()
-        await self._receive_message_task.cancel()
-    
-    async def send_message(self, message: SipMessage):
-        logger.info(f"Sending SIP message: {message}")
-        await self.sock.send(message)
-
-    async def on_received_message(self, message: SipMessage, addr: Tuple[str, int]):
-        match message:
-            case message.is_request():
-                logger.info(f"Received SIP request: {message}")
-            case message.is_response():
-                logger.info(f"Received SIP response: {message}")
-            case _:
-                logger.error(f"Invalid SIP message: {message}")
-        return None
-    
-    async def send_rtp(self, data: bytes):
-        pass
-    
-    async def on_received_rtp(self, data: bytes):
-        pass
-    
-    async def send_dtmf(self, digit: str):
-        pass
-    
-    async def on_received_dtmf(self, digit: str):
-        pass
-    
-    def create_request(self, method: SipMethod, to_address: Address):
-        self.cseq += 1
-        request = SipMessage(
-            method=method,
-            uri=to_address.uri,
-            headers={
-                'CSeq': [Field('CSeq', f"{self.cseq} {method}")]
-            }
-        )
-        return request
-    
-    def create_response(self, request: SipMessage, status_code: SipStatusCode):
-        response = SipMessage(
-            status_code=status_code,
-            headers={
-                'CSeq': [Field('CSeq', f"{request.get_header('CSeq').value} {request.method}")]
-            }
-        )
-        return response
+    async def start(self): ...
+    async def close(self): ...
+    async def send_message(self, message: SipMessage): ...
+    async def received_message(self, message: SipMessage, addr: Tuple[str, int]): ...
+    async def send_rtp(self, data: bytes): ...
+    async def received_rtp(self, data: bytes): ...
+    async def send_dtmf(self, digit: str): ...
+    async def received_dtmf(self, digit: str): ...
+    def create_request(self, method: SipMethod, to_address: Address): ...
+    def create_response(self, request: SipMessage, status_code: SipStatusCode): ...
 
 
 # Sessions (Session Layer)
