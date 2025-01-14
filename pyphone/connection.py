@@ -1,114 +1,163 @@
+from dataclasses import dataclass, field
+from typing import Callable, Tuple
 import socket
 import threading
-from typing import Callable, Optional, Tuple, Union
-from enum import Enum
+import asyncio
+
+from pyphone.utils import ProtocolType
+
+@dataclass
+class ConnectionConfig:
+    local_address: str = field(default='0.0.0.0')
+    local_port: int = field(default=5060)
+    public_address: str = field(default='0.0.0.0')
+    public_port: int = field(default=10060)
+    protocol: ProtocolType = field(default=ProtocolType.UDP)
+    buffer_size: int = field(default=4096)
+    reliable: bool = field(default=False)
+    congestion_controlled: bool = field(default=False)
+    keep_alive: bool = field(default=False)
+    keep_alive_interval: int = field(default=30)
+    keep_alive_timeout: int = field(default=30)
+    keep_alive_max_retril: int = field(default=3)
 
 
-class Protocol(Enum):
-    TCP = 'tcp'
-    UDP = 'udp'
-
-
-class Connection:
-    def __init__(
-        self,
-        address: str,
-        port: int,
-        protocol: Union[str, Protocol] = Protocol.UDP,
-        callback: Optional[Callable[[bytes, Tuple[str, int]], None]] = None,
-        buffer_size: int = 1024
-    ):
-        self.address = address
-        self.port = port
-        self.protocol = Protocol(protocol) if isinstance(protocol, str) else protocol
+class Connection(threading.Thread):
+    def __init__(self, config: ConnectionConfig, targe_address: Tuple[str, int], callback: Callable):
+        self.config = config
+        self.target_address = targe_address
         self.callback = callback
-        self.buffer_size = buffer_size
-        self.sock: Optional[socket.socket] = None
-        self.is_running = False
-        self._recv_thread: Optional[threading.Thread] = None
+        self._socket = None
+        self._recv_thread = None
+        self._is_running = False
+        self.daemon = True
+        self.start()
 
     def start(self):
         try:
-            sock_type = socket.SOCK_DGRAM if self.protocol == Protocol.UDP else socket.SOCK_STREAM
-            self.sock = socket.socket(socket.AF_INET, sock_type)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.sock.bind((self.address, self.port))
-            
-            if self.protocol == Protocol.TCP:
-                self.sock.listen(5)
-            
-            self.is_running = True
-            self._recv_thread = threading.Thread(target=self._recv_loop)
-            self._recv_thread.daemon = True  # Thread daemon para terminar com o programa principal
-            self._recv_thread.start()
-        
+            sock_type = socket.SOCK_STREAM if self.config.protocol in (ProtocolType.TCP, ProtocolType.TLS) else socket.SOCK_DGRAM
+            self._socket = socket.socket(socket.AF_INET, sock_type)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._socket.bind(self.target_address)
+            if self.config.protocol in (ProtocolType.TCP, ProtocolType.TLS):
+                self._socket.listen()
+            self._is_running = True
+            self.receive()
         except Exception as e:
-            self.close()
-            raise RuntimeError(f"Erro ao iniciar sessão: {e}")
+            self.stop()
+            raise e
     
-    def close(self):
-        self.is_running = False
-        
-        if self.sock:
-            try:
-                self.sock.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass  # Ignora erros de shutdown
-            self.sock.close()
-            self.sock = None
-        
-        if self._recv_thread and self._recv_thread.is_alive():
-            self._recv_thread.join(timeout=1.0)  # Timeout para evitar bloqueio indefinido
-        
-
-    def send(self, data: Union[bytes, str], target_address: Optional[Tuple[str, int]] = None):
-        if not self.sock:
-            raise RuntimeError("Socket não inicializado")
-
+    def send(self, data: bytes, targe_address: Tuple[str, int] = None):
         try:
-            # Converte str para bytes se necessário
             if isinstance(data, str):
                 data = data.encode()
-
-            if self.protocol == Protocol.TCP:
-                self.sock.send(data)
+            if self.config.protocol in (ProtocolType.TCP, ProtocolType.TLS):
+                self._socket.send(data)
             else:
-                addr = target_address or (self.address, self.port)
-                self.sock.sendto(data, addr)
-        
+                self._socket.sendto(data, targe_address or self.target_address)
         except Exception as e:
-            raise RuntimeError(f"Erro ao enviar dados: {e}")
-
-    def _recv_loop(self):
-        if not self.sock:
-            return
-
-        while self.is_running:
+            raise RuntimeError(f"Error sending data: {e} to {targe_address or self.target_address}")
+    
+    def receive(self):
+        if not self._socket:
+            raise Exception("Socket not initialized")
+        while self._is_running:
             try:
-                if self.protocol == Protocol.TCP:
-                    conn, addr = self.sock.accept()
+                if self.config.protocol in (ProtocolType.TCP, ProtocolType.TLS):
+                    conn, addr = self._socket.accept()
                     try:
                         with conn:
-                            data = conn.recv(self.buffer_size)
-                            if data and self.callback:
-                                self.callback(data, addr)
-                    except Exception as e:
-                        print(f"Erro na conexão TCP: {e}")
+                            data = conn.recv(self.config.buffer_size)
+                    except Exception:
+                        pass
                 else:
-                    data, addr = self.sock.recvfrom(self.buffer_size)
-                    if data and self.callback:
-                        self.callback(data, addr)
-
+                    data, addr = self._socket.recvfrom(self.config.buffer_size)
+                self.callback(data, addr)
             except Exception as e:
-                if self.is_running:  # Só loga erro se ainda estiver rodando
-                    print(f"Erro ao receber dados: {e}")
+                raise RuntimeError(f"Error receiving data: {e}")
+    
+    def stop(self):
+        self._is_running = False
+        if self._socket:
+            try:
+                self._socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            self._socket.close()
+        self._socket = None
+        self.join()
 
-    def __enter__(self) -> 'Connection':
-        self.start()
-        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.close()
+class AsyncConnection:
+    def __init__(
+            self,
+            config: ConnectionConfig,
+            targe_address: Tuple[str, int],
+            callback: Callable
+        ):
+        self.config = config
+        self.target_address = targe_address
+        self.callback = callback
+        self._socket = None
+        self._recv_task = None
+        self._is_running = False
 
-    def __del__(self) -> None:
-        self.close()
+    async def start(self):
+        try:
+            sock_type = socket.SOCK_STREAM if self.config.protocol in (
+                ProtocolType.TCP,
+                ProtocolType.TLS
+            ) else socket.SOCK_DGRAM
+            self._socket = socket.socket(socket.AF_INET, sock_type)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._socket.bind(self.target_address)
+            if self.config.protocol in (ProtocolType.TCP, ProtocolType.TLS):
+                self._socket.listen()
+            self._is_running = True
+            await asyncio.create_task(self.receive())
+        except Exception as e:
+            await self.stop()
+            raise e
+    
+    async def stop(self):
+        self._is_running = False
+        if self._socket:
+            try:
+                self._socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            self._socket.close()
+        self._socket = None
+    
+    async def send(
+            self,
+            data: bytes,
+            targe_address: Tuple[str, int] = None
+        ):
+        try:
+            if isinstance(data, str):
+                data = data.encode()
+            if self.config.protocol in (ProtocolType.TCP, ProtocolType.TLS):
+                self._socket.send(data)
+            else:
+                self._socket.sendto(data, targe_address or self.target_address)
+        except Exception as e:
+            raise RuntimeError(f"Error sending data: {e} to {targe_address or self.target_address}")
+    
+    async def receive(self):
+        if not self._socket:
+            raise Exception("Socket not initialized")
+        while self._is_running:
+            try:
+                if self.config.protocol in (ProtocolType.TCP, ProtocolType.TLS):
+                    conn, addr = self._socket.accept()
+                    try:
+                        with conn:
+                            data = conn.recv(self.config.buffer_size)
+                    except Exception:
+                        pass
+                else:
+                    data, addr = self._socket.recvfrom(self.config.buffer_size)
+                await self.callback(data, addr)
+            except Exception as e:
+                raise RuntimeError(f"Error receiving data: {e}")

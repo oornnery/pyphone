@@ -1,7 +1,22 @@
 from enum import Enum
 from typing import List
 import uuid
+import logging
+from rich.logging import RichHandler
 
+__all__ = [
+    
+]
+
+
+logging.basicConfig(
+    level="NOTSET",
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)]
+)
+
+logger = logging.getLogger("rich")
 
 EOL = r'\r\n'
 SIP_SCHEME = 'SIP'
@@ -24,8 +39,39 @@ COMPACT_HEADERS = {
     "k": "supported",
 }
 
+HEADERS = {
+    "via": "Via",
+    "from": "From",
+    "to": "To",
+    "contact": "Contact",
+    "call-id": "Call-ID",
+    "cseq": "CSeq",
+    "max-forwards": "Max-Forwards",
+    "content-length": "Content-Length",
+    "content-type": "Content-Type",
+    "authorization": "Authorization",
+    "www-authenticate": "WWW-Authenticate",
+    "proxy-authenticate": "Proxy-Authenticate",
+}
 
-class Method(Enum):
+SDP_HEADERS = {
+    "version": "v",
+    "origin": "o",
+    "session_name": "s",
+    "connection_info": "c",
+    "bandwidth_info": "b",
+    "time_description": "t",
+    "media_description": "m",
+    "attribute": "a",
+    "email_address": "e",
+    "phone_number": "p",
+    "uri": "u",
+    "repeat_time": "r",
+    "time_zone": "z",
+}
+
+
+class SipMethod(Enum):
     REGISTER = "REGISTER"
     INVITE = "INVITE"
     ACK = "ACK"
@@ -46,19 +92,17 @@ class Method(Enum):
 
     def __repr__(self):
         return self.__str__()
-
-    def __getitem__(self, method: str):
-        for m in Method:
-            if m._value_ == method:
-                return m
-        return None
-
-    @staticmethod
-    def methods() -> List[str]:
-        return [str(m) for m in Method]
+    
+    @classmethod
+    def methods(cls) -> List[str]:
+        return [method for method in cls]
+    
+    @classmethod
+    def from_string(cls, method: str) -> 'SipMethod':
+        return cls(method.upper())
 
 
-class StatusCode(Enum):
+class SipStatusCode(Enum):
     # SIP Status Codes 1xx
     TRYING = (100, "Trying")
     RINGING = (180, "Ringing")
@@ -150,16 +194,17 @@ class StatusCode(Enum):
         return f'{self.code} {self.reason}'
 
     def __repr__(self):
-        return self
-    
-    def __getitem__(self, code: int) -> 'StatusCode':
-        for status in StatusCode:
-            if status.code == code:
-                return status
-        return None
+        return self.__str__()
 
     def __contains__(self, code: int) -> bool:
-        return code in [status.code for status in StatusCode]
+        return code in [status.code for status in SipStatusCode]
+
+    @classmethod
+    def from_code(cls, code: int) -> 'SipStatusCode':
+        for x in cls:
+            if code == x.code:
+                return x 
+                
 
 
 
@@ -194,20 +239,90 @@ class ProtocolType(Enum):
         return self._value_
 
 
-class TransactionState(Enum):
+class DialogState(Enum):
     INIT = "INIT"
     EARLY = "EARLY"
+    CONFIRMED = "CONFIRMED"
+    TERMINATED = "TERMINATED"
+
+    def __str__(self):
+        return self.value
+
+
+class TransactionState(Enum):
     TRYING = "TRYING"
     PROCEEDING = "PROCEEDING"
     COMPLETED = "COMPLETED"
     TERMINATED = "TERMINATED"
 
 
+class MediaType(Enum):
+    AUDIO = "audio"
+    VIDEO = "video"
+    MESSAGE = "message"
+
+    def __str__(self):
+        return self.value
+
+
+class MediaSessionType(Enum):
+    SENDRECV = "sendrecv"
+    SENDONLY = "sendonly"
+    RECVONLY = "recvonly"
+    INACTIVE = "inactive"
+
+    def __str__(self):
+        return self.value
+
+
+class CodecType(Enum):
+    PCMU = ('0', 'pcmu', '8000')
+    PCMA = ('8', 'pcma', '8000')
+
+    def __new__(self, code: str, description: str, rate: str):
+        obj = object.__new__(self)
+        obj.code = code
+        obj.description = description
+        obj.rate = rate
+        obj._value_ = code
+        return obj
+
+    @classmethod
+    def codecs(cls) -> List[str]:
+        return [codec for codec in cls]
+
+    def __str__(self) -> str:
+        return f'{self.code} {self.description}/{self.rate}'
+
+
+class DtmfPayloadType(Enum):
+    RFC_2833 = ('101', 'telephone-event', '8000', '101 0-16')
+
+    def __new__(self, code: str, description: str, rate: str, fmtp: str):
+        obj = object.__new__(self)
+        obj.code = code
+        obj.description = description
+        obj.rate = rate
+        obj.fmtp = fmtp
+        return obj
+
+    def __str__(self) -> str:
+        return f'{self.code} {self.description}/{self.rate}'
+
+
+class MediaProtocolType(Enum):
+    RTP_AVP = 'RTP/AVP'
+    RTCP = 'RTCP'
+
+    def __str__(self) -> str:
+        return self.value
+
+
 def generate_branch():
     return f"z9hG4bK-{uuid.uuid4()[0:8]}"
 
-def generate_call_id():
-    return str(uuid.uuid4())
+def generate_call_id(host: str = '0.0.0.0'):
+    return f'{host}@{uuid.uuid4()}'
 
 def generate_tag():
     return str(uuid.uuid4()[0:6])
