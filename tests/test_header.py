@@ -1,32 +1,48 @@
+import re
 import pytest
-from pyphone.client import (
-    RequestLine,
-    StatusLine,
-    Via,
-    )
+
+from pyphone.utils import (
+    REQUEST_LINE_PATTERN,
+    RESPONSE_LINE_PATTERN,
+    URI_PATTERN,
+    ADDRESS_PATTERN,
+    HEADER_PATTERN,
+    BODY_PATTERN,
+)
+
+
+def test_request_line_pattern():
+    pattern = re.compile(REQUEST_LINE_PATTERN)
+    test_string = 'INVITE sip:user@example.com SIP/2.0'
+    res = pattern.match(test_string)
+    
+    assert res.group('method') == 'INVITE'
+    assert res.group('uri') == 'sip:user@example.com'
+    assert res.group('scheme') == 'SIP'
+    assert res.group('version') == '2.0'
+
+def test_response_line_pattern():
+    pattern = re.compile(RESPONSE_LINE_PATTERN)
+    test_string = 'SIP/2.0 200 OK'
+    res = pattern.match(test_string)
+    
+    assert res.group('scheme') == 'SIP'
+    assert res.group('version') == '2.0'
+    assert res.group('status_code') == '200'
+    assert res.group('reason') == 'OK'
 
 
 
-def test_request_line_uri():
-    h = RequestLine(method='INVITE', remote_username='1002', remote_address='proxy.example.com', remote_port=5060)
-    assert str(h) == 'INVITE sip:1002@proxy.example.com:5060 SIP/2.0'
-
-
-def test_status_line_uri():
-    h = StatusLine(status_code=200, reason_phrase='OK')
-    assert str(h) == 'SIP/2.0 200 OK'
-
-
-def test_via_uri():
-    h = Via(public_address='0.0.0.0', public_port=5060, branch='z9hG4bK-12345678')
-    assert str(h) == 'Via: SIP/2.0/UDP 0.0.0.0:5060;branch=z9hG4bK-12345678'
-
-# def test_from_uri():
-#     uri = Uri(address='127.0.0.1', username='1001', port=5060, params={'tag': '12345678'})
-#     assert uri == '"P2x9137" sip:1001@127.0.0.1:5060;tag=12345678'
-
-# def test_to_uri():
-#     uri = Uri(address='proxy.example.com', username='1002', port=5060)
-#     assert uri == 'sip:1002@proxy.example.com:5060'
-
-
+def test_uri_complete_pattern():
+    pattern = re.compile(URI_PATTERN)
+    test_string = '"Username" <sip:user@example.com:5060;transport=tcp;received=0.0.0.0>;tag=123456'
+    
+    res = pattern.match(test_string)
+    assert res.group('display_info') == 'Username'
+    assert res.group('uri') == '<sip:user@example.com:5060;transport=tcp;received=0.0.0.0>'
+    assert res.group('user') == 'user'
+    assert res.group('host') == 'example.com'
+    assert res.group('port') == '5060'
+    assert res.group('params') == 'transport=tcp;received=0.0.0.0'
+    assert res.group('tag') == '123456'
+    
