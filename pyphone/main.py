@@ -64,6 +64,8 @@ HEADERS = {
     "proxy-authenticate": "Proxy-Authenticate",
 }
 
+MULTI_HEADERS = {'via', 'contact', 'record-route', 'route', 'path'}
+
 SDP_HEADERS = {
     "version": "v",
     "origin": "o",
