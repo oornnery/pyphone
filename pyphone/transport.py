@@ -1,95 +1,102 @@
 import socket
 import threading
-from typing import Callable, Tuple, Literal, AnyStr
+from typing import Callable, Tuple, Literal
 from dataclasses import dataclass
 
-from pyphone.utils import log, console
+from utils import log, console
 
 TransportProtocol = Literal['udp', 'tcp']
 TransportAddr = Tuple[str, int]
 
 @dataclass
-class ConnectionConfig:
+class TransportConfig:
     target_addr: TransportAddr
-    protocol: TransportProtocol
     local_addr: TransportAddr = ('0.0.0.0', 0)
+    protocol: TransportProtocol = 'udp'
     buffer_size: int = 4096
     timeout: float = 5.0
+    
+    def __post_init__(self):
+        self.protocol = self.protocol.lower()
+        # TODO: Improve validation
 
-class Connection:
-    def __init__(self, config: ConnectionConfig, callback: Callable):
-        self.config = config
+class Transport:
+    def __init__(self, cfg: TransportConfig, callback: Callable):
+        self.cfg = cfg
         self.callback = callback
-        self.socket = None
         self.running = False
+        self.sock = None
         self._thread = None
 
-    def start(self):
-        if self.config.protocol == 'udp':
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        else:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.bind(self.config.local_addr)
-        self.socket.settimeout(self.config.timeout)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        
-        if self.config.protocol == 'tcp':
-            self.socket.listen(1)
-        
-        self.running = True
-        self.thread = threading.Thread(target=self._receive_loop)
-        self.thread.start()
-        log.info(f"Started {self.config.protocol.upper()} connection on {self.config.local_addr}")
+    def _create_socket(self) -> socket.socket:
+        _sock_type = socket.SOCK_DGRAM if self.cfg.protocol == 'udp' \
+            else socket.SOCK_STREAM
+        sock = socket.socket(socket.AF_INET, _sock_type)
+        # Allow reusing the same address
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(self.cfg.timeout)
+        # Listen for incoming connections
+        sock.bind(self.cfg.local_addr)
+        if self.cfg.protocol == 'tcp':
+            sock.listen(5)
+        return sock
 
-    def _receive_loop(self):
+    def send(self, data, addr=None):
+        self.sock.connect(addr or self.cfg.remote_addr)
+        self.sock.sendall(data)
+    
+    def _received_loop(self):
         while self.running:
             try:
-                if self.config.protocol == 'udp':
-                    data, addr = self.socket.recvfrom(self.config.buffer_size)
-                else:
-                    conn, addr = self.socket.accept()
-                    data = conn.recv(self.config.buffer_size)
-                    conn.close()
-
-                log.debug(f"Received data from {addr}: bytes {len(data)}")
-                self.callback(data, addr)
-            except socket.timeout:
-                continue
+                if self.cfg.protocol == 'udp':
+                    data, addr = self.sock.recvfrom(self.cfg.buffer_size)
+                    self.callback(data, addr)
+                elif self.cfg.protocol == 'tcp':
+                    conn, addr = self.sock.accept()
+                    with conn:
+                        while self.running:
+                            data = conn.recv(self.cfg.buffer_size)
+                            if not data:
+                                break
+                            self.callback(data, addr)
+            except (ConnectionResetError, socket.timeout):
+                pass
             except Exception as e:
-                log.warning(f"Error in receive loop: {e}")
-                continue
-
-    def send(self, data: AnyStr):
-        try:
-            log.debug(f"Sending data to {self.config.target_addr}: \n{data}")
-            if isinstance(data, str):
-                data = data.encode()
-            if self.config.protocol == 'udp':
-                self.socket.sendto(data, self.config.target_addr)
-            else:
-                with socket.create_connection(self.config.target_addr, timeout=self.config.timeout) as conn:
-                    conn.sendall(data)
-            log.debug(f"Sent data to {self.config.target_addr}: bytes {len(data)}")
-        except Exception as e:
-            log.error(f"Error sending data: {e}")
-
+                break
+    
+    def start(self):
+        self.running = True
+        self.sock = self._create_socket()
+        self._thread = threading.Thread(target=self._received_loop)
+        self._thread.start()
+        
+    
     def stop(self):
         self.running = False
-        if self.socket:
-            self.socket.close()
-        if self.thread:
-            self.thread.join()
-        log.info(f"Stopped {self.config.protocol.upper()} connection on {self.config.local_addr}")
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+        if self._thread:
+            self._thread.join()
+            self._thread = None
+    
+    def __del__(self):
+        self.stop()
+    
+    def __enter__(self):
+        self.start()
+        return self
 
-
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
+            
 
 # Exemplo de uso
 if __name__ == '__main__':
     import re
+    import time
     
-
-
-    def split_sip_message(data: AnyStr) -> tuple[dict, dict]:
+    def split_sip_message(data) -> tuple[dict, dict]:
             parts = re.split(r'\r\n\r\n|\n\n', data, maxsplit=1)
             first_line = str(parts[0].split('\r\n')[0]).strip()
             _header = list(x for x in parts[0].split('\r\n')[1:])
@@ -109,22 +116,19 @@ if __name__ == '__main__':
                 body[i] = [v.strip() for v in values if v]
                 
             return first_line, header, body
-            
-            
+
     def handle_data(data: bytes, addr: TransportAddr):
-        console.print(f"\nReceived data from {addr}:")
-        # console.print(data.decode())
-        message = split_sip_message(data.decode())
-        console.print(message)
+        console.print(f"\nReceived data from {addr}:\n")
+        console.print(data.decode())
+        # console.print("\nParsed message:\n")
+        # message = split_sip_message(data.decode())
+        # console.print(message)
         
     # Criar conexão UDP
-    cfg = ConnectionConfig(
+    cfg = TransportConfig(
         target_addr=('demo.mizu-voip.com', 37075),
         protocol='udp',
-        local_addr=('0.0.0.0', 5001)
     )
-    conn = Connection(cfg, handle_data)
-    conn.start()
 
     sdp = (
         'v=0\r\n'
@@ -140,26 +144,23 @@ if __name__ == '__main__':
         'a=sendrecv\r\n'
     )
     
+    remote_uri = f'sip:{cfg.target_addr[0]}:{cfg.target_addr[1]}'
+    via_uri = f'sip:{cfg.local_addr[0]}:{cfg.local_addr[1]};rport;branch=z9hG4bK1234567890'
+    from_uri = f'<sip:anonymous@{cfg.local_addr[0]}>'
+    to_uri = f'<sip:{cfg.target_addr[0]}:{cfg.target_addr[1]}>'
     message = (
-        'OPTIONS sip:siptrunkbr.net2phone.com SIP/2.0\r\n'
-        f'Via: SIP/2.0/UDP {cfg.local_addr[0]};rport;branch=z9hG4bK1234567890\r\n'
-        'From: <sip:ping@localhost>\r\n'
-        'To: <sip:siptrunkbr.net2phone.com>\r\n'
+        f'OPTIONS sip:{cfg.target_addr[0]} SIP/2.0\r\n'
+        f'Via: SIP/2.0/UDP {via_uri}\r\n'
+        f'From: {from_uri}\r\n'
+        f'To: {to_uri}\r\n'
         'Call-ID: 1234567890\r\n'
         'CSeq: 1 OPTIONS\r\n'
         'Max-Forwards: 70\r\n'
-        f'Content-Length: {len(sdp)}\r\n'
-        'Content-Type: application/sdp\r\n'
+        f'Content-Length: 0\r\n'
         '\r\n'
-        f'{sdp}'
     )
-    console.print(split_sip_message(message))
-    # Enviar dados
-    conn.send(message)
-    
-    # Manter o programa rodando por um tempo
-    import time
-    time.sleep(10)
+    with Transport(cfg, handle_data) as conn:
+        for x in range(5):
+            conn.send(message.encode(), cfg.target_addr)
+            time.sleep(1)
 
-    # Fechar conexões
-    conn.stop()
