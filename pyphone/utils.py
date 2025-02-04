@@ -371,7 +371,6 @@ class Message:
                 continue
             h = re.compile(self.HEADER_PATTERN).match(line)
             if header:
-                if 
                 log.info(header.groupdict())
                 
         

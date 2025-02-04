@@ -1,8 +1,54 @@
 
 from datetime import datetime
-from typing import List
+from typing import List, TypedDict
 
-class Message: ...
+
+
+message = {
+    'first_line': '',
+    'via': [],
+    'from': '',
+    'to': '',
+    'call_id': '',
+    'cseq': '',
+    'contact': '',
+    'content_type': '',
+    'extra_headers': {},
+    'body': ''
+}
+
+class Message:
+    def __init__(
+            self,
+            first_line: str,
+            headers: dict,
+            body: dict
+        ):
+        self._first_line = first_line
+        self._headers = headers
+        self._body = body
+    
+    def get(self, key, default=None):
+        return self.headers.get(key, default)
+    
+    def add(self, key, value):
+        self.headers[key] = value
+    
+    def is_request(self):
+        return self._first_line.startswith('SIP/2.0')
+    
+    def is_response(self):
+        return self._first_line.endswith('SIP/2.0')
+
+    def from_string(self, s: str):
+        pass
+    
+    def to_bytes(self):
+        pass
+    
+    def to_summary(self):
+        pass
+
 
 class Request(Message): ...
 
