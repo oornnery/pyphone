@@ -5,8 +5,8 @@ from dataclasses import dataclass
 import uuid
 from typing import List, TypedDict
 
-from pyphone.transport import TransportAddr, TransportConfig, Transport, Address
-from pyphone.utils import console, log
+from transport import TransportAddr, TransportConfig, Transport
+from utils import console, log
 
 from rich.panel import Panel
 
@@ -134,9 +134,10 @@ class Dialog:
 @dataclass
 class UserAgent:
     username: str
-    password: str
     domain: str
     port: int = 5060
+    login: str = None
+    password: str = None
     transport: str = 'udp'
     display_name: str = None
     contact: str = None
@@ -149,11 +150,11 @@ class Session:
         self.cfg = transport_cfg
         self._transport = Transport(transport_cfg, self.handle_data)
         self._dialogs = []
-    
+        self._running = False
     
     def handle_data(self, data: bytes, addr: TransportAddr):
         log.info(f"Received data from {addr}:\n")
-        log.debug(Panel(
+        console.print(Panel(
             data.decode(),
             title="Received data from {addr}",
             subtitle=f"{len(data)} bytes"))
@@ -169,42 +170,73 @@ class Session:
 
     def _generate_uri(
             self,
-            addr: Address,
+            addr: str,
+            port: int = None,
             tag: bool = False,
+            _tag: str = None,
             branch: bool = False,
+            branch_default: str = None,
             rport: bool = False,
+            bracket: bool = False,
             extra_params: dict = None,
             ):
         
-        uri = f'sip:{addr.addr}'
-        if addr.port:
-            uri += f':{addr.port}'
+        uri = f'sip:{addr}'
+        if port and port != 0:
+            uri += f':{port}'
         if tag:
-            uri += f';tag={self._generate_tag()}'
+            uri += f';tag={_tag or self._generate_tag()}'
         if rport:
             uri += f';rport'
         if branch:
-            uri += f';branch={self._generate_branch()}'
+            uri += f';branch={branch_default or self._generate_branch()}'
         for k, v in extra_params.items() if extra_params else {}:
             if v:
                 uri += f';{k}={v}'
                 continue
             uri += f';{k}'
+        if bracket:
+            uri = f'<{uri}>'
         return uri
     
-    def options(self, ua: UserAgent = None, extra_headers: list[tuple[str, str]] = None):
+    def request(self, method: str, ua: UserAgent = None, branch: str = None, extra_headers: list[tuple[str, str]] = None):
+        for d in self._dialogs:
+            if d.tr.branch == branch:
+                dialog = d
+        if not dialog:
+            dialog = Dialog(Transaction(Request()))
+            self._dialogs.append(dialog)
         
         msg = (
-            f'OPTIONS {self._generate_uri(Address(*self.cfg.local_addr), branch=True)} SIP/2.0\r\n'
-            f'Via: SIP/2.0/{self.cfg.protocol} {self._generate_uri(Address(*self.cfg.local_addr), branch=True)}\r\n'
-            f'From: {self._generate_uri(Address(*self.cfg.local_addr), tag=True)}\r\n'
-            f'To: {self._generate_uri(Address(*self.cfg.target_addr))}\r\n'
+            f'{method.upper()} {self._generate_uri(addr=ua.domain, port=ua.port)} SIP/2.0\r\n'
+            f'Via: SIP/2.0/{self.cfg.protocol} {self._generate_uri(addr=self.cfg.local_addr[0], port=self.cfg.local_addr[1], branch=True)}\r\n'
+            f'From: {self._generate_uri(addr=self.cfg.local_addr[0], port=self.cfg.local_addr[1], tag=True, bracket=True)}\r\n'
+            f'To: {self._generate_uri(addr=ua.domain, port=ua.port, bracket=True)}\r\n'
             f'Call-ID: {self._generate_call_id()}\r\n'
-            f'CSeq: 1 OPTIONS\r\n'
+            f'CSeq: 1 {method.upper()}\r\n'
             f'Max-Forwards: 70\r\n'
             f'Content-Length: 0\r\n'
+            # f'{k}: {v}\r\n' for k, v in extra_headers if extra_headers else []
             '\r\n'
         )
+        
+        self._transport.send(msg.encode(), (ua.domain, ua.port))
+
+    def start(self):
+        self._transport.start()
+        self._running = True
+        
+    def stop(self):
+        self._transport.stop()
+    
+    def __enter__(self):
+        self.start()
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
+        self._running = False
+    
 
 # Exemplo de uso
 if __name__ == '__main__':
@@ -232,12 +264,6 @@ if __name__ == '__main__':
                 
             return first_line, header, body
 
-    def handle_data(data: bytes, addr: TransportAddr):
-        console.print(f"\nReceived data from {addr}:\n")
-        console.print(data.decode())
-        # console.print("\nParsed message:\n")
-        # message = split_sip_message(data.decode())
-        # console.print(message)
         
     # Criar conexão UDP
     cfg = TransportConfig(
@@ -259,24 +285,16 @@ if __name__ == '__main__':
         'a=sendrecv\r\n'
     )
     
-    remote_uri = f'sip:{cfg.target_addr[0]}:{cfg.target_addr[1]}'
-    via_uri = f'sip:{cfg.local_addr[0]}:{cfg.local_addr[1]};rport;branch=z9hG4bK1234567890'
-    from_uri = f'<sip:anonymous@{cfg.local_addr[0]}>'
-    to_uri = f'<sip:{cfg.target_addr[0]}:{cfg.target_addr[1]}>'
-    message = (
-        f'OPTIONS sip:{cfg.target_addr[0]} SIP/2.0\r\n'
-        f'Via: SIP/2.0/UDP {via_uri}\r\n'
-        f'From: {from_uri}\r\n'
-        f'To: {to_uri}\r\n'
-        'Call-ID: 1234567890\r\n'
-        'CSeq: 1 OPTIONS\r\n'
-        'Max-Forwards: 70\r\n'
-        f'Content-Length: 0\r\n'
-        '\r\n'
-    )
-    with Transport(cfg, handle_data) as conn:
+    with Session(cfg) as s:
         for x in range(5):
-            conn.send(message.encode(), cfg.target_addr)
+            s.request(
+                method='OPTIONS',
+                ua=UserAgent(
+                    username='ping-pong',
+                    domain='demo.mizu-voip.com',
+                    port=37075,
+                    transport='udp',
+                    ))
             time.sleep(1)
 
     

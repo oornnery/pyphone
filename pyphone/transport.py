@@ -3,15 +3,10 @@ import threading
 from typing import Callable, Tuple, Literal
 from dataclasses import dataclass
 
-from pyphone.utils import log, console
+from utils import log, console
 
 TransportProtocol = Literal['udp', 'tcp']
 TransportAddr = Tuple[str, int]
-
-@dataclass
-class Address:
-    addr: str
-    port: int
 
 @dataclass
 class TransportConfig:
