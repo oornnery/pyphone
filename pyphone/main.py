@@ -1,9 +1,14 @@
 
 
-import socket
-import threading
 from datetime import datetime
+from dataclasses import dataclass
+import uuid
 from typing import List, TypedDict
+
+from pyphone.transport import TransportAddr, TransportConfig, Transport, Address
+from pyphone.utils import console, log
+
+from rich.panel import Panel
 
 
 
@@ -20,68 +25,6 @@ message = {
     'body': ''
 }
 
-class Transport:
-    def __init__(self, protocol: str, local_addr: tuple, remote_addr: tuple, callback: callable, timeout: int=5, bufsize: int=4096):
-        self.protocol = protocol
-        self.local_addr = local_addr
-        self.remote_addr = remote_addr
-        self.timeout = timeout
-        self.bufsize = bufsize
-        self.callback = callback
-        self.running = False
-        self.sock = None
-        self._thread = None
-
-    def _create_socket(self) -> socket.socket:
-        _sock_type = socket.SOCK_DGRAM if self.protocol.lower() == 'udp' else socket.SOCK_STREAM
-        sock = socket.socket(socket.AF_INET, _sock_type)
-        # Allow reusing the same address
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.settimeout(self.timeout)
-        # Listen for incoming connections
-        sock.bind(self.local_addr)
-        if self.protocol.lower() == 'tcp':
-            sock.listen(5)
-        return sock
-
-    def send(self, data, addr=None):
-        self.sock.connect(addr or self.remote_addr)
-        self.sock.sendall(data)
-    
-    def _received_loop(self):
-        while self.running:
-            try:
-                if self.protocol.lower() == 'udp':
-                    data, addr = self.sock.recvfrom(self.bufsize)
-                    self.callback(data, addr)
-                elif self.protocol.lower() == 'tcp':
-                    conn, addr = self.sock.accept()
-                    with conn:
-                        while self.running:
-                            data = conn.recv(self.bufsize)
-                            if not data:
-                                break
-                            self.callback(data, addr)
-            except (ConnectionResetError, socket.timeout):
-                pass
-            except Exception as e:
-                break
-    
-    def start(self):
-        self.running = True
-        self.sock = self._create_socket()
-        self._thread = threading.Thread(target=self._received_loop)
-        self._thread.start()
-        
-    
-    def stop(self):
-        self.running = False
-        if self.sock:
-            self.sock.close()
-            self.sock = None
-        if self._thread:
-            self._thread.join()
-            self._thread = None
 
 
 class Message:
@@ -186,38 +129,155 @@ class Dialog:
     
     def cancel(self):
         pass
-    
 
+
+@dataclass
+class UserAgent:
+    username: str
+    password: str
+    domain: str
+    port: int = 5060
+    transport: str = 'udp'
+    display_name: str = None
+    contact: str = None
+    expires: int = 3600
+    realm: str = None
+    conn_cfg: TransportConfig = None
+
+class Session:
+    def __init__(self, transport_cfg: TransportConfig):
+        self.cfg = transport_cfg
+        self._transport = Transport(transport_cfg, self.handle_data)
+        self._dialogs = []
+    
+    
+    def handle_data(self, data: bytes, addr: TransportAddr):
+        log.info(f"Received data from {addr}:\n")
+        log.debug(Panel(
+            data.decode(),
+            title="Received data from {addr}",
+            subtitle=f"{len(data)} bytes"))
+    
+    def _generate_branch(self):
+        return f'z9hG4bK{str(uuid.uuid4())[:8]}'
+    
+    def _generate_call_id(self):
+        return str(uuid.uuid4())
+    
+    def _generate_tag(self):
+        return str(uuid.uuid4())[:4]
+
+    def _generate_uri(
+            self,
+            addr: Address,
+            tag: bool = False,
+            branch: bool = False,
+            rport: bool = False,
+            extra_params: dict = None,
+            ):
+        
+        uri = f'sip:{addr.addr}'
+        if addr.port:
+            uri += f':{addr.port}'
+        if tag:
+            uri += f';tag={self._generate_tag()}'
+        if rport:
+            uri += f';rport'
+        if branch:
+            uri += f';branch={self._generate_branch()}'
+        for k, v in extra_params.items() if extra_params else {}:
+            if v:
+                uri += f';{k}={v}'
+                continue
+            uri += f';{k}'
+        return uri
+    
+    def options(self, ua: UserAgent = None, extra_headers: list[tuple[str, str]] = None):
+        
+        msg = (
+            f'OPTIONS {self._generate_uri(Address(*self.cfg.local_addr), branch=True)} SIP/2.0\r\n'
+            f'Via: SIP/2.0/{self.cfg.protocol} {self._generate_uri(Address(*self.cfg.local_addr), branch=True)}\r\n'
+            f'From: {self._generate_uri(Address(*self.cfg.local_addr), tag=True)}\r\n'
+            f'To: {self._generate_uri(Address(*self.cfg.target_addr))}\r\n'
+            f'Call-ID: {self._generate_call_id()}\r\n'
+            f'CSeq: 1 OPTIONS\r\n'
+            f'Max-Forwards: 70\r\n'
+            f'Content-Length: 0\r\n'
+            '\r\n'
+        )
+
+# Exemplo de uso
 if __name__ == '__main__':
+    import re
     import time
     
-    def callback(data, addr):
-        print(f'\nReceived from: {addr}\n')
-        print(data)
+    def split_sip_message(data) -> tuple[dict, dict]:
+            parts = re.split(r'\r\n\r\n|\n\n', data, maxsplit=1)
+            first_line = str(parts[0].split('\r\n')[0]).strip()
+            _header = list(x for x in parts[0].split('\r\n')[1:])
+            _body = list(x for x in (parts[1] if len(parts) > 1 else '').split('\r\n'))
+            
+            header = {}
+            body = {}
+            
+            for i, line in enumerate(_header):
+                values = line.split(':', 1)
+                header[i] = [v.strip() for v in values if v]
+            
+            for i, line in enumerate(_body) if len(_body) > 1 else []:
+                values = line.split('=', 1)
+                if len(values) <= 1:
+                    continue
+                body[i] = [v.strip() for v in values if v]
+                
+            return first_line, header, body
+
+    def handle_data(data: bytes, addr: TransportAddr):
+        console.print(f"\nReceived data from {addr}:\n")
+        console.print(data.decode())
+        # console.print("\nParsed message:\n")
+        # message = split_sip_message(data.decode())
+        # console.print(message)
+        
+    # Criar conexão UDP
+    cfg = TransportConfig(
+        target_addr=('demo.mizu-voip.com', 37075),
+        protocol='udp',
+    )
+
+    sdp = (
+        'v=0\r\n'
+        f'o=- 0 0 IN IP4 {cfg.local_addr[0]}\r\n'
+        's=session\r\n'
+        f'c=IN IP4 {cfg.local_addr[0]}\r\n'
+        't=0 0\r\n'
+        'm=audio 5002 RTP/AVP 9 0 8 18 101\r\n'
+        'a=rtpmap:0 PCMU/8000\r\n'
+        'a=rtpmap:0 PCMA/8000\r\n'
+        'a=rtpmap:101 telephone-event/8000\r\n'
+        'a=fmtp:101 0-16\r\n'
+        'a=sendrecv\r\n'
+    )
     
-    local_addr = ('0.0.0.0', 10080)
-    remote_addr = ('demo.mizu-voip.com', 37075)
-    remote_uri = f'sip:{remote_addr[0]}:{remote_addr[1]}'
-    via_uri = f'sip:{local_addr[0]}:{local_addr[1]}'
-    from_uri = f'sip:anonymous@{local_addr[0]}'
-    to_uri = 'sip:demo.mizu-voip.com:37075'
+    remote_uri = f'sip:{cfg.target_addr[0]}:{cfg.target_addr[1]}'
+    via_uri = f'sip:{cfg.local_addr[0]}:{cfg.local_addr[1]};rport;branch=z9hG4bK1234567890'
+    from_uri = f'<sip:anonymous@{cfg.local_addr[0]}>'
+    to_uri = f'<sip:{cfg.target_addr[0]}:{cfg.target_addr[1]}>'
     message = (
-        f'OPTIONS sip:{remote_addr[0]} SIP/2.0\r\n'
-        f'Via: SIP/2.0/UDP {via_uri};rport;branch=z9hG4bK1234567890\r\n'
-        f'From: <{from_uri}>\r\n'
-        f'To: <{to_uri}>\r\n'
+        f'OPTIONS sip:{cfg.target_addr[0]} SIP/2.0\r\n'
+        f'Via: SIP/2.0/UDP {via_uri}\r\n'
+        f'From: {from_uri}\r\n'
+        f'To: {to_uri}\r\n'
         'Call-ID: 1234567890\r\n'
         'CSeq: 1 OPTIONS\r\n'
         'Max-Forwards: 70\r\n'
         f'Content-Length: 0\r\n'
         '\r\n'
     )
-    
-    tp = Transport('udp', local_addr, remote_addr, callback)
-    tp.start()
-    
-    tp.send(message.encode())
-    time.sleep(5)
-    tp.stop()
+    with Transport(cfg, handle_data) as conn:
+        for x in range(5):
+            conn.send(message.encode(), cfg.target_addr)
+            time.sleep(1)
+
     
     
