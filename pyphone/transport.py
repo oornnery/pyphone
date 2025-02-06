@@ -42,6 +42,8 @@ class Transport:
         return sock
 
     def send(self, data, addr=None):
+        if isinstance(data, str):
+            data = data.encode()
         self.sock.connect(addr or self.cfg.remote_addr)
         self.sock.sendall(data)
     
