@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Dict
 from enum import Enum
 import re
 
@@ -80,116 +80,116 @@ class Uri:
             raise ValueError(f"Invalid URI: {raw}")
         display_name, scheme, username, host, port, branch, tag = match.groups()
         return cls(username, host, int(port), branch, tag, display_name, scheme, "<" in raw)
+
+# @dataclass
+# class SIPHeader:
+#     name: str
+#     value: str
+
+#     def __str__(self):
+#         return f"{self.name}: {self.value}{CRLF}"
+
+#     def items(self):
+#         return self.name, self.value
     
-@dataclass
-class SIPHeader:
-    name: str
-    value: str
+#     @classmethod
+#     def parse(cls, raw: str):
+#         name, value = re.split(r':\s*', raw, 1)
+#         return cls(name, value.strip())
 
-    def __str__(self):
-        return f"{self.name}: {self.value}{CRLF}"
+# class ViaHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Via", value)
 
-    def items(self):
-        return self.name, self.value
-    
-    @classmethod
-    def parse(cls, raw: str):
-        name, value = re.split(r':\s*', raw, 1)
-        return cls(name, value.strip())
+# class FromHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("From", value)
 
-class ViaHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Via", value)
+# class ToHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("To", value)
 
-class FromHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("From", value)
+# class CallIDHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Call-ID", value)
 
-class ToHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("To", value)
+# class CSeqHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("CSeq", value)
 
-class CallIDHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Call-ID", value)
+# class ContactHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Contact", value)
 
-class CSeqHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("CSeq", value)
+# class MaxForwardsHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Max-Forwards", value)
 
-class ContactHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Contact", value)
+# class ContentLengthHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Content-Length", value)
 
-class MaxForwardsHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Max-Forwards", value)
-
-class ContentLengthHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Content-Length", value)
-
-class ContentTypeHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Content-Type", value)
+# class ContentTypeHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Content-Type", value)
         
-class WWWAuthenticateHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("WWW-Authenticate", value)
+# class WWWAuthenticateHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("WWW-Authenticate", value)
 
-class AuthorizationHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Authorization", value)
+# class AuthorizationHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Authorization", value)
 
-class ProxyAuthenticateHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Proxy-Authenticate", value)
+# class ProxyAuthenticateHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Proxy-Authenticate", value)
 
-class ProxyAuthorizationHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Proxy-Authorization", value)
+# class ProxyAuthorizationHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Proxy-Authorization", value)
 
-class RouteHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Route", value)
+# class RouteHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Route", value)
 
-class RecordRouteHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Record-Route", value)
+# class RecordRouteHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Record-Route", value)
 
-class ExpiresHeader(SIPHeader):
-    def __init__(self, value: str):
-        super().__init__("Expires", value)
+# class ExpiresHeader(SIPHeader):
+#     def __init__(self, value: str):
+#         super().__init__("Expires", value)
 
 
-class Message:
-    def __init__(self, headers: dict, body: str):
+class SIPMessage:
+    def __init__(self, headers: List[Dict[str, str]], body: str):
         self.headers = headers
         self.body = body
     
     @property
-    def uri(self):
-        return self.headers["Via"].uri
-    
-    @property
     def branch(self):
-        return self.headers["Via"].branch
+        return re.search(r'branch=([^;]+)', self.headers["Via"]).group(1)
     
     @property
     def from_tag(self):
-        return self.headers["From"].tag
+        return re.search(r'tag=([^;]+)', self.headers["From"]).group(1)
     
     @property
     def to_tag(self):
-        return self.headers["To"].tag
+        return re.search(r'tag=([^;]+)', self.headers["To"]).group(1)
     
     @property
     def call_id(self):
         return self.headers["Call-ID"]
     
     @property
-    def cseq(self):
-        return self.headers["CSeq"]
+    def cseq_id(self):
+        return self.headers["CSeq"].split()[0]
+    
+    @property
+    def cseq_method(self):
+        return self.headers["CSeq"].split()[1]
     
     @property
     def is_request(self):
@@ -199,8 +199,8 @@ class Message:
         return f"{self.__class__.__name__}({self.call_id}, {self.branch})"
 
 
-class SIPRequest(Message):
-    def __init__(self, method: SIPMethod, uri: str, headers: List[SIPHeader] = None, body: str = None):
+class SIPRequest(SIPMessage):
+    def __init__(self, method: str, uri: str, headers: List[Dict[str, str]] = None, body: str = None):
         super().__init__(headers, body)
         method = method
         uri = uri
@@ -210,12 +210,13 @@ class SIPRequest(Message):
         body = f"{CRLF}{self.body}" if self.body else CRLF
         return f"{self.method} {self.uri} SIP/2.0{CRLF}{headers}{body}"
 
-class SIPResponse(Message):
-    def __init__(self, status: SIPStatus, headers: List[SIPHeader] = None, body: str = None):
+class SIPResponse(SIPMessage):
+    def __init__(self, status: int, reason: str, headers: List[Dict[str, str]] = None, body: str = None):
         super().__init__(headers, body)
-        status = status
+        self.status = status
+        self.reason = reason
 
     def __str__(self):
-        headers = ''.join([f"{k}: {v}{CRLF}" for k, v in self.headers.items()])
+        headers = ''.join([f"{k}: {v}{CRLF}" for k, v in (x for x in self.headers).items()])
         body = f"{CRLF}{self.body}" if self.body else CRLF
-        return f"SIP/2.0 {self.status} {self.status.reason}{CRLF}{headers}{body}"
+        return f"SIP/2.0 {self.status} {self.reason}{CRLF}{headers}{body}"

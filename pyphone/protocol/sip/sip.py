@@ -1,16 +1,16 @@
 from typing import Callable, Dict
 from pyphone.protocol.sip.message import Message, SIPRequest, SIPResponse
 from pyphone.protocol.sip.dialog import SIPDialog
-from pyphone.transport import Transport
+from pyphone.connection import ConnCfg, ConnectionHandler
 from pyphone.utils import log
 
 
-class SIPStack:
-    def __init__(self, transport: Transport, callback: Callable = None):
-        self.transport = transport(callback=self.handle_transport)
+class SIP(ConnectionHandler):
+    def __init__(self, cfg: ConnCfg, callback: Callable):
+        super().__init__(cfg, self.handle_transport)
         self.callback = callback
         self.dialogs: Dict[str, SIPDialog]
-
+        
     def create_dialog(self, message: Message):
         if not message.is_request:
             log.error("Dialog/Transaction not found for response")
@@ -25,7 +25,7 @@ class SIPStack:
         msg_type = "request" if isinstance(message, SIPRequest) else "response"
         log.info(f"Sending {msg_type}\n{message}")
         dlg = self.dialogs.get(message.call_id, self.create_dialog(message))
-        self.transport.send(message)
+        self.send(message)
         dlg.handle_message(message)
 
     def handle_transport(self, raw: bytes, addr: tuple):
