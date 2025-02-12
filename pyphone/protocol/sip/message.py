@@ -1,7 +1,7 @@
-from dataclasses import dataclass
-from typing import List, Dict
-from enum import Enum
 import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Union
 
 CRLF = "\r\n"
 
@@ -81,142 +81,170 @@ class Uri:
         display_name, scheme, username, host, port, branch, tag = match.groups()
         return cls(username, host, int(port), branch, tag, display_name, scheme, "<" in raw)
 
-# @dataclass
-# class SIPHeader:
-#     name: str
-#     value: str
+@dataclass
+class Address:
+    host: str
+    port: int
+    branch: str = None
 
-#     def __str__(self):
-#         return f"{self.name}: {self.value}{CRLF}"
+HEADERS = [
+    "Via", "From", "To", "Call-ID", "CSeq", "Contact", "Max-Forwards",
+    "Content-Length", "Content-Type", "WWW-Authenticate", "Authorization",
+    "Proxy-Authenticate", "Proxy-Authorization", "Route", "Record-Route",
+    "Expires"
+]
 
-#     def items(self):
-#         return self.name, self.value
+
+@dataclass
+class Header:
+    name: str
+    value: str
+
+    def __str__(self):
+        return f"{self.name}: {self.value}{CRLF}"
+
+
+@dataclass
+class Via:
+    address: Address
+    branch: str = None
+    protocol: str = "UDP"
+    scheme: str = "SIP"
+    version: str = "2.0"
+
+    def __str__(self):
+        if not self.branch:
+            self.branch = "z9hG4bK{}".format(hash(self))
+        return f"Via: {self.scheme}/{self.version}/{self.protocol} {self.address};branch={self.branch}{CRLF}"
+
+
+@dataclass
+class From:
+    uri: Uri
+    display_name: str = None
+    tag: str = None
+
+    def __str__(self):
+        d_name = f'"{self.display_name}" ' if self.display_name else ''
+        tag = f";tag={self.tag}" if self.tag else ''
+        return f"From: {d_name}{self.uri}{tag}{CRLF}"
+
+
+@dataclass
+class To:
+    uri: Uri
+    display_name: str = None
+    tag: str = None
+
+    def __str__(self):
+        d_name = f'"{self.display_name}" ' if self.display_name else ''
+        if not self.tag:
+            self.tag = hash(self)
+        return f"To: {d_name}{self.uri};tag={self.tag}{CRLF}"
+
+
+@dataclass
+class CallID:
+    id: str
+
+    def __str__(self):
+        if not self.id:
+            self.id = hash(self)
+        return f"Call-ID: {self.id}{CRLF}"
+
+
+@dataclass
+class CSeq:
+    id: int
+    method: SIPMethod
+
+    def __str__(self):
+        return f"CSeq: {self.id} {self.method}{CRLF}"
+
+
+@dataclass
+class Headers:
+    via_uri: Union[List[Via], Via]
+    from_uri: From
+    to_uri: To
+    call_id: CallID = field(default_factory=CallID)
+    cseq: CSeq = field(default_factory=CSeq)
+    extra_headers: List[Header] = field(default_factory=list)
     
-#     @classmethod
-#     def parse(cls, raw: str):
-#         name, value = re.split(r':\s*', raw, 1)
-#         return cls(name, value.strip())
-
-# class ViaHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Via", value)
-
-# class FromHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("From", value)
-
-# class ToHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("To", value)
-
-# class CallIDHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Call-ID", value)
-
-# class CSeqHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("CSeq", value)
-
-# class ContactHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Contact", value)
-
-# class MaxForwardsHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Max-Forwards", value)
-
-# class ContentLengthHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Content-Length", value)
-
-# class ContentTypeHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Content-Type", value)
-        
-# class WWWAuthenticateHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("WWW-Authenticate", value)
-
-# class AuthorizationHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Authorization", value)
-
-# class ProxyAuthenticateHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Proxy-Authenticate", value)
-
-# class ProxyAuthorizationHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Proxy-Authorization", value)
-
-# class RouteHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Route", value)
-
-# class RecordRouteHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Record-Route", value)
-
-# class ExpiresHeader(SIPHeader):
-#     def __init__(self, value: str):
-#         super().__init__("Expires", value)
-
+    def __str__(self):
+        ...
 
 class SIPMessage:
-    def __init__(self, headers: List[Dict[str, str]], body: str):
+    def __init__(self, headers: Headers, body: str = None):
         self.headers = headers
         self.body = body
-    
+        
     @property
     def branch(self):
-        return re.search(r'branch=([^;]+)', self.headers["Via"]).group(1)
+        return re.search(r'branch=([^;]+)', self.headers.via_uri[-1]).group(1)
     
     @property
     def from_tag(self):
-        return re.search(r'tag=([^;]+)', self.headers["From"]).group(1)
+        return re.search(r'tag=([^;]+)', self.headers.from_uri).group(1)
     
     @property
     def to_tag(self):
-        return re.search(r'tag=([^;]+)', self.headers["To"]).group(1)
+        return re.search(r'tag=([^;]+)', self.headers.to_uri).group(1)
     
     @property
     def call_id(self):
-        return self.headers["Call-ID"]
+        return self.headers.call_id
     
     @property
     def cseq_id(self):
-        return self.headers["CSeq"].split()[0]
+        return self.headers.cseq.split()[0]
     
     @property
     def cseq_method(self):
-        return self.headers["CSeq"].split()[1]
+        return self.headers.cseq.split()[1]
     
     @property
     def is_request(self):
         return isinstance(self, SIPRequest)
-    
-    def __str__(self):
-        return f"{self.__class__.__name__}({self.call_id}, {self.branch})"
 
 
 class SIPRequest(SIPMessage):
-    def __init__(self, method: str, uri: str, headers: List[Dict[str, str]] = None, body: str = None):
+    def __init__(self, method: str, uri: str, address: Address, headers: Headers = None, body: str = None):
         super().__init__(headers, body)
-        method = method
-        uri = uri
+        self.method = method
+        self.uri = uri
+        self.address = address
+        
+        if not headers:
+            headers = Headers()
+        if not headers.via_uri:
+            uri = Uri(host=self.address.host, port=self.address.port, branch='')
+            headers.via_uri.append(f"SIP/2.0/UDP {uri}")
+        if not headers.from_uri:
+            uri = Uri(host=self.address.host, port=self.address.port, bracket=True)
+            headers.from_uri = str(uri)
+        if not headers.to_uri:
+            uri = Uri(host=self.address.host, port=self.address.port, bracket=True, tag='')
+            headers.to_uri = str(uri)
+        self.headers
+        
 
     def __str__(self):
-        headers = ''.join([f"{k}: {v}{CRLF}" for k, v in (x for x in self.headers).items()])
         body = f"{CRLF}{self.body}" if self.body else CRLF
-        return f"{self.method} {self.uri} SIP/2.0{CRLF}{headers}{body}"
+        return f"{self.method} {self.uri} SIP/2.0{CRLF}{self.headers}{body}"
+
+    @classmethod
+    def request(cls, method: SIPMethod, uri: Uri, headers: Headers, body: str = None):
+        return cls(method, uri, headers, body)
+
 
 class SIPResponse(SIPMessage):
-    def __init__(self, status: int, reason: str, headers: List[Dict[str, str]] = None, body: str = None):
+    def __init__(self, status: int, reason: str, headers: Headers = None, body: str = None):
         super().__init__(headers, body)
         self.status = status
         self.reason = reason
 
     def __str__(self):
-        headers = ''.join([f"{k}: {v}{CRLF}" for k, v in (x for x in self.headers).items()])
         body = f"{CRLF}{self.body}" if self.body else CRLF
-        return f"SIP/2.0 {self.status} {self.reason}{CRLF}{headers}{body}"
+        return f"SIP/2.0 {self.status} {self.reason}{CRLF}{self.headers}{body}"
+    
