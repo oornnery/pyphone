@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Union
+from typing import List, Union, Literal
 
 CRLF = "\r\n"
 
@@ -40,52 +40,37 @@ class SIPStatus(Enum):
         obj.reason = reason
         return obj
 
-
-@dataclass
-class Uri:
-    username: str
-    host: str
-    port: int = 5060
-    branch: str = None
-    tag: str = None
-    display_name: str = None
-    scheme: str = "sip"
-    bracket: bool = False
-    
-    def __str__(self):
-        uri = ''
-        if self.username:
-            uri += f"{self.username}@{uri}"
-        if self.host:
-            uri += f"{self.host}"
-        if self.port:
-            uri += f":{self.port}"
-        if self.scheme in "sip,sips":
-            uri = f"{self.scheme}:{uri}"
-            if self.branch:
-                uri += f";branch={self.branch}"
-            if self.bracket:
-                uri = f"<{uri}>"
-                if self.tag:
-                    uri += f";tag={self.tag}"
-        if self.display_name:
-            uri = f'"{self.display_name}" {uri}'
-        return uri
-
-    @classmethod
-    def parse(cls, raw: str):
-        uri_pattern = re.compile(r'(?:"([^"]+)"\s+)?<?(sip|sips):([^@]+)@([^:]+)(?::(\d+))?(?:;branch=([^;]+))?(?:;tag=([^;]+))?>?')
-        match = uri_pattern.match(raw)
-        if not match:
-            raise ValueError(f"Invalid URI: {raw}")
-        display_name, scheme, username, host, port, branch, tag = match.groups()
-        return cls(username, host, int(port), branch, tag, display_name, scheme, "<" in raw)
-
 @dataclass
 class Address:
     host: str
     port: int
-    branch: str = None
+    params: dict = field(default_factory=dict)
+
+    def __str__(self):
+        addr = f"{self.host}:{self.port}"
+        if self.params:
+            addr += f"{';'.join([f"{k}={v}" for k, v in self.params.items()])}"
+        return addr
+
+@dataclass
+class Uri:
+    address: Address
+    username: str = None
+    scheme: Literal["sip", "sips"] = "sip"
+    bracket: bool = True
+    
+    def __str__(self):
+        uri = str(self.address)
+        if self.username:
+            uri += f"{self.username}@{uri}"
+            uri += f":{self.port}"
+        if self.scheme in "sip,sips":
+            uri = f"{self.scheme}:{uri}"
+            if self.bracket:
+                uri = f"<{uri}>"
+        return uri
+
+
 
 HEADERS = [
     "Via", "From", "To", "Call-ID", "CSeq", "Contact", "Max-Forwards",
@@ -108,14 +93,16 @@ class Header:
 class Via:
     address: Address
     branch: str = None
-    protocol: str = "UDP"
-    scheme: str = "SIP"
-    version: str = "2.0"
+    rport: str = None
+    received: str = None
+    transport: Literal["UDP", "TCP"] = "UDP"
+    scheme: Literal["SIP"] = "SIP"
+    version: Literal["2.0"] = "2.0"
 
     def __str__(self):
         if not self.branch:
             self.branch = "z9hG4bK{}".format(hash(self))
-        return f"Via: {self.scheme}/{self.version}/{self.protocol} {self.address};branch={self.branch}{CRLF}"
+        return f"Via: {self.scheme}/{self.version}/{self.transport} {self.address};branch={self.branch}{CRLF}"
 
 
 @dataclass
@@ -123,11 +110,13 @@ class From:
     uri: Uri
     display_name: str = None
     tag: str = None
+    params: dict = field(default_factory=dict)
 
     def __str__(self):
         d_name = f'"{self.display_name}" ' if self.display_name else ''
         tag = f";tag={self.tag}" if self.tag else ''
-        return f"From: {d_name}{self.uri}{tag}{CRLF}"
+        params = f"{';'.join([f"{k}={v}" for k, v in self.params.items()])}" if self.params else ''
+        return f"From: {d_name}{self.uri}{params}{tag}{CRLF}"
 
 
 @dataclass
@@ -135,12 +124,13 @@ class To:
     uri: Uri
     display_name: str = None
     tag: str = None
+    params: dict = field(default_factory=dict)
 
     def __str__(self):
         d_name = f'"{self.display_name}" ' if self.display_name else ''
-        if not self.tag:
-            self.tag = hash(self)
-        return f"To: {d_name}{self.uri};tag={self.tag}{CRLF}"
+        tag = f";tag={self.tag}" if self.tag else ''
+        params = f"{';'.join([f"{k}={v}" for k, v in self.params.items()])}" if self.params else ''
+        return f"To: {d_name}{self.uri}{params}{tag}{CRLF}"
 
 
 @dataclass
